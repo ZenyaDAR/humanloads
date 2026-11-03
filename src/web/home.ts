@@ -1,7 +1,9 @@
 import { isValidPackageName, searchPackages } from '../core/sources.ts';
 import type { FeaturedFile, FeaturedRow, SearchHit } from '../core/types.ts';
+import { compareLinksHtml } from '../core/seo.ts';
+import COMPARE_PAIRS from '../../data/compare.json';
 import {
-  BASE, esc, fetchStatic, fmt, fmtCompact, fmtDate, navigate, pkgHref, METHODOLOGY_URL, themeToggle, timeAgo,
+  BASE, esc, fetchStatic, fmt, fmtCompact, fmtDate, navigate, pkgHref, METHODOLOGY_URL, headTools, timeAgo,
 } from './util.ts';
 
 const FEATURED_SHOWN = 6;
@@ -24,6 +26,7 @@ export function renderHome(view: HTMLElement): void {
       </p>
     </section>
     <div class="featured"></div>
+    ${compareLinksHtml(BASE, COMPARE_PAIRS, esc)}
     <aside class="home-note">
       <p class="hand">how it works</p>
       <ol>
@@ -33,7 +36,7 @@ export function renderHome(view: HTMLElement): void {
       </ol>
       <p><a href="${METHODOLOGY_URL}">Read the methodology</a></p>
     </aside>`;
-  view.querySelector('.home-top')!.append(themeToggle());
+  view.querySelector('.home-top')!.append(headTools());
   view.querySelector('.home-search')!.append(searchBox('home'));
   const data = fetchStatic<FeaturedFile>('data/featured.json');
   void examples(view.querySelector<HTMLElement>('.home-examples')!, data);
@@ -56,7 +59,7 @@ export function masthead(): HTMLElement {
   const header = document.createElement('header');
   header.className = 'masthead';
   header.innerHTML = `<a class="logo" href="${BASE}">human<span>loads</span></a>`;
-  header.append(searchBox('top'), themeToggle());
+  header.append(searchBox('top'), headTools());
   return header;
 }
 

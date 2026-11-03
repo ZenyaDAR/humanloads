@@ -1,6 +1,6 @@
 // Usage: npm run data
 // Build-time data for the static site, written into public/ (gitignored; CI generates it before `vite build`):
-//   public/data/calibration.json  canary-measured crawler floor (skipped while the canary isn't on npm)
+//   public/data/calibration.json  canary-measured crawler floor ({} while the canary isn't on npm)
 //   public/data/featured.json     homepage cards
 //   public/data/summary.json      per-package numbers for every estimated package (prerendered pages, sitemap)
 //   public/badges/<safe>.json     shields.io endpoint badges for data/tracked.json, plus badges/index.json
@@ -25,6 +25,8 @@ const MAX_RETRIES = 6;
 
 const pub = fileURLToPath(new URL('../public/', import.meta.url));
 const tracked = JSON.parse(await readFile(new URL('../data/tracked.json', import.meta.url), 'utf8'));
+// Popular comparison pairs get prerendered pages, so their packages need numbers in summary.json.
+const comparePairs = JSON.parse(await readFile(new URL('../data/compare.json', import.meta.url), 'utf8'));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const write = async (rel, obj) => {
@@ -93,6 +95,8 @@ try {
       : `calibration: skipped (${err.message})`,
   );
 }
+// Always ship the file, so the site's fetch never logs a 404; `{}` means "no calibration, use the default floor".
+if (!calibration) await write('data/calibration.json', {});
 
 // Candidate pool: tracked packages, a few registry searches (mostly popular: "humans"),
 // and recently released packages with some downloads (where bots dominate: "inflated").
@@ -119,8 +123,8 @@ for (let page = 1; page <= RECENT_PAGES; page++) {
     )),
   );
 }
-// Tracked first (the cap never drops a badge), then searched and recent interleaved so any cap keeps both kinds.
-const names = new Set(tracked);
+// Tracked and comparison packages first (the cap never drops a badge or a compare page), then searched and recent interleaved so any cap keeps both kinds.
+const names = new Set([...tracked, ...comparePairs.flat()]);
 for (let i = 0; i < Math.max(searched.length, recent.length); i++) {
   if (searched[i]) names.add(searched[i]);
   if (recent[i]) names.add(recent[i]);

@@ -9,6 +9,8 @@ import { searchBox } from './home.ts';
 import {
   BASE, SITE_URL, esc, fetchStatic, fmt, fmtCompact, METHODOLOGY_URL, navigate, pkgHref, safeName, safeUrl, setPageMeta, timeAgo,
 } from './util.ts';
+import { compareLinksHtml } from '../core/seo.ts';
+import COMPARE_PAIRS from '../../data/compare.json';
 
 const CACHE_TTL = 60 * 60 * 1000;
 const VISIBLE_VERSIONS = 12;
@@ -84,6 +86,7 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
         <section class="compare-with" aria-labelledby="cmp-title"><h2 class="section-title" id="cmp-title">Compare with…</h2></section>
         <section class="badge-box" hidden></section>
       </div>
+      ${compareLinksHtml(BASE, COMPARE_PAIRS.filter((p) => p.includes(name)), esc, `Compare ${name}`)}
       <p class="method"><a href="${METHODOLOGY_URL}">How we estimate this <span aria-hidden="true">→</span></a></p>
     </article>`,
     );

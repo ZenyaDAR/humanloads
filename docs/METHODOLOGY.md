@@ -1,139 +1,141 @@
-# Методология: как мы оцениваем реальные установки
+# Methodology: how we estimate real installs
 
-> Главное правило проекта: мы показываем **оценку с понятной погрешностью**, а не «точное число пользователей».
-> Точного числа нет ни у кого, включая сам npm.
+> A shorter, reader-friendly version of these notes lives on the site: https://humanloads.dev/docs/methodology
 
-## 1. Что на самом деле считает npm
+> The core rule of the project: we show an **estimate with an honest margin of error**, not an "exact number of users".
+> Nobody has an exact number, including npm itself.
 
-`api.npmjs.org` отдаёт количество успешных (HTTP 200) отдач `.tgz`-архива пакета в сутки.
-Уникальность, IP, User-Agent и тип клиента не учитываются. В число попадают:
+## 1. What npm actually counts
 
-| Источник | Как выглядит в данных |
+`api.npmjs.org` returns the number of successful (HTTP 200) downloads of a package's `.tgz` archive per day.
+Uniqueness, IP, User-Agent and client type are not taken into account. The count includes:
+
+| Source | How it looks in the data |
 |---|---|
-| Зеркала (Artifactory, Nexus, npmmirror, Verdaccio-прокси…) | Всплеск в день публикации версии, затухает за 2–4 дня |
-| Сканеры безопасности и краулеры | Ровный «пол»: **каждая** версия получает одинаковое число загрузок в неделю |
-| CI чужих проектов | Регулярные загрузки одной (закреплённой) версии, часто по будням |
-| Живые разработчики | Неравномерно, в основном последняя версия и закреплённые в lock-файлах |
-| Накрутка | Прямые запросы к tarball-URL, неотличимы от остального |
+| Mirrors (Artifactory, Nexus, npmmirror, Verdaccio proxies...) | A spike on the day a version is published, fading out over 2-4 days |
+| Security scanners and crawlers | A flat "floor": **every** version gets the same number of downloads per week |
+| Other projects' CI | Regular downloads of one (pinned) version, often on weekdays |
+| Live developers | Uneven, mostly the latest version and versions pinned in lock files |
+| Inflated counts | Direct requests to the tarball URL, indistinguishable from the rest |
 
-## 2. Подтверждение на реальных данных (nervegraph, 2026-07…11)
+## 2. Confirmed on real data (a small package, 2026-07…11)
 
-| Дата | Загрузки | Событие |
+| Date | Downloads | Event |
 |---|---|---|
-| 2026-07-22 | 341 | опубликованы 3 версии (≈114 на версию) |
-| 2026-08-16 | 254 | опубликованы 2 версии (≈127 на версию) |
-| 2026-08-18 | 147 | опубликована 1 версия |
-| остальные дни | 0–11 | фон |
+| 2026-07-22 | 341 | 3 versions published (≈114 per version) |
+| 2026-08-16 | 254 | 2 versions published (≈127 per version) |
+| 2026-08-18 | 147 | 1 version published |
+| all other days | 0-11 | background |
 
-Загрузки по версиям за последнюю неделю: `0.1.0: 3, 0.2.0: 3, 0.2.1: 3, 0.3.0: 3, 0.3.1: 3, 0.4.0: 5`.
-Каждая версия получила ровно 3 загрузки. Так ведёт себя робот, который раз в неделю скачивает все версии подряд.
-Сверх этого пола есть только **2** загрузки последней версии. Из 20 недельных загрузок органическими выглядят примерно 2.
+Downloads per version over the last week: `0.1.0: 3, 0.2.0: 3, 0.2.1: 3, 0.3.0: 3, 0.3.1: 3, 0.4.0: 5`.
+Every version received exactly 3 downloads. This is how a robot behaves when it downloads all versions in a row once a week.
+Above that floor there are only **2** downloads of the latest version. Of 20 weekly downloads, roughly 2 look organic.
 
-Совпадает с исследованием Tenable: ~100–150 автоматических загрузок на каждую новую версию.
+This matches the Tenable research: ~100-150 automated downloads for every new version.
 
-## 3. Модель v1 (MVP)
+## 3. Model v1 (MVP)
 
-Входные данные (все публичные, CORS открыт):
-- `GET https://api.npmjs.org/downloads/range/<from>:<to>/<pkg>`: загрузки по дням (до 18 мес. за запрос).
-- `GET https://registry.npmjs.org/<pkg>`: поле `time` (даты публикаций версий), метаданные.
-- `GET https://api.npmjs.org/versions/<pkg>/last-week`: загрузки по версиям за 7 дней.
+Inputs (all public, CORS is open):
+- `GET https://api.npmjs.org/downloads/range/<from>:<to>/<pkg>`: downloads per day (up to 18 months per request).
+- `GET https://registry.npmjs.org/<pkg>`: the `time` field (version publish dates) and metadata.
+- `GET https://api.npmjs.org/versions/<pkg>/last-week`: downloads per version over 7 days.
 
-### Шаг A. Вырезаем всплески публикаций (дневной ряд)
-1. Для каждого дня публикации `p` берём окно `[p, p+3]` дней.
-2. Для каждого дня `d` в окне фон `b = max(медиана того же дня недели за −14/−7 дней, медиана за +7/+14 дней)`.
-   Нули (у API npm бывают сбои, когда за день отдаётся 0) и дни внутри других окон пропускаем.
-   Если с обеих сторон пусто, берём медиану ненулевых дней в пределах ±14 дней.
-3. День считаем всплеском, только если `факт > 2·b` (`SPIKE_FACTOR`). Тогда заменяем значение на `b`, а разницу относим к зеркалам и сканерам.
+### Step A. Cut out publish spikes (daily series)
+1. For each publish day `p`, take the window `[p, p+3]` days.
+2. For each day `d` in the window, the background is `b = max(median of the same weekday over -14/-7 days, median over +7/+14 days)`.
+   Zeros (the npm API has outages where a day is reported as 0) and days inside other windows are skipped.
+   If both sides are empty, take the median of the non-zero days within ±14 days.
+3. A day counts as a spike only if `actual > 2·b` (`SPIKE_FACTOR`). Its value is then replaced with `b`, and the difference is attributed to mirrors and scanners.
 
-Почему так, а не «медиана 14 дней до публикации» (проверено на фикстурах):
-- `react` публикует canary-версии почти ежедневно: дней без публикаций нет, фон получался 0, органика 0%;
-- у `zod` разница будни/выходные около 2.5×: простая медиана срезала каждый будний день (651M ложных «зеркал»);
-- дни сбоев npm с нулями тянули фон вниз.
+Why this and not "the median of the 14 days before publication" (checked on fixtures):
+- `react` publishes canary versions almost daily: there are no days without a publish, so the background came out as 0 and organic as 0%;
+- `zod` has a weekday/weekend difference of about 2.5×: a plain median cut off every weekday (651M false "mirror" downloads);
+- npm outage days with zeros dragged the background down.
 
-Сравнение с тем же днём недели снимает недельный ритм. Максимум из «до» и «после» не даёт срезать рост популярности.
-Порог 2× пропускает обычные колебания.
+Comparing against the same weekday removes the weekly rhythm. Taking the maximum of "before" and "after" avoids cutting out growth in popularity.
+The 2× threshold lets normal fluctuations through.
 
-### Шаг B. Вычитаем пол краулеров (недельный срез по версиям)
-1. `f` = нижние перцентили недельных загрузок среди версий старше 14 дней (свежие ещё в окне всплеска), см. п. 2.
-2. Органика за неделю ≈ `Σ max(0, vᵢ − f) − (вырезанные в шаге A загрузки за последние 7 дней)`.
-   Загрузки по версиям включают всплеск свежей версии, поэтому вычитаем его, чтобы остаться в очищенной шкале.
-   Пол для точечной оценки — 10-й перцентиль, для нижней границы — 25-й, для верхней — минимум.
-3. Отношение `organic_week / cleaned_week` применяем к очищенному ряду из шага A. Так получается дневная оценка.
-   Нулевые дни среди последних 7 при фоне ≥ 10 считаем сбоем npm: в знаменателе отношения заменяем их фоном
-   (загрузки по версиям эти дни учитывают), иначе отношение упирается в 1. Сам дневной ряд не меняется.
-4. Если старых версий меньше 3, `f` не оценить. Тогда берём пол `f₀` из калибровки по канарейке (п. 5,
-   `floorPerVersion`), а если её нет — глобальную константу 3. Точечная оценка — `f₀`, нижняя граница — `2·f₀`,
-   верхняя — 0. В заметках указано, откуда взят пол. Если `f` измерен, калибровка не используется.
+### Step B. Subtract the crawler floor (weekly per-version slice)
+1. `f` = lower percentiles of weekly downloads among versions older than 14 days (fresh ones are still inside the spike window), see item 2.
+2. Weekly organic ≈ `Σ max(0, vᵢ − f) − (downloads cut out in step A over the last 7 days)`.
+   Per-version downloads include the spike of the fresh version, so we subtract it to stay on the cleaned scale.
+   The floor for the point estimate is the 10th percentile, for the lower bound the 25th, for the upper bound the minimum.
+3. The ratio `organic_week / cleaned_week` is applied to the cleaned series from step A. This gives the daily estimate.
+   Zero days among the last 7 with a background ≥ 10 are treated as an npm outage: in the ratio's denominator we replace them with the background
+   (per-version downloads do count those days), otherwise the ratio gets pinned to 1. The daily series itself is not changed.
+4. If there are fewer than 3 old versions, `f` cannot be estimated. In that case we take the floor `f₀` from the canary calibration (item 5,
+   `floorPerVersion`), and if there is none, the global constant 3. The point estimate is `f₀`, the lower bound is `2·f₀`,
+   the upper bound is 0. The notes say where the floor came from. If `f` was measured, the calibration is not used.
 
-### Шаг C. Уверенность
-Базовые правила:
-- органика < 10 в неделю → `low`: шум сопоставим с сигналом;
-- пол `f` не измерен (мало старых версий) → `low`;
-- органика ≥ 1000 в неделю при измеренном поле → `high`;
-- иначе `medium`.
+### Step C. Confidence
+Base rules:
+- organic < 10 per week → `low`: the noise is comparable to the signal;
+- floor `f` not measured (too few old versions) → `low`;
+- organic ≥ 1000 per week with a measured floor → `high`;
+- otherwise `medium`.
 
-Повышение `low → medium` (только при органике ≥ 10 в неделю, иначе оценка — шум):
-- **независимые доказательства** (п. 4): ≥ 5 зависимых пакетов, или ≥ 10 зависимых репозиториев,
-  или ≥ 1000 CDN-хитов jsDelivr за месяц;
-- **недельный ритм**: отношение будни/выходные ≥ 1.3 (см. ниже).
+Upgrade `low → medium` (only when organic ≥ 10 per week, otherwise the estimate is noise):
+- **independent evidence** (item 4): ≥ 5 dependent packages, or ≥ 10 dependent repositories,
+  or ≥ 1000 jsDelivr CDN hits per month;
+- **weekly rhythm**: weekday/weekend ratio ≥ 1.3 (see below).
 
-Доказательства не поднимают до `high` (правило `high` остаётся прежним) и никогда не понижают уверенность:
-отсутствие данных ≠ отрицательный сигнал. Каждое сработавшее правило добавляет заметку
-(«12 published packages depend on it», «Weekday traffic is 1.8× weekend — human work rhythm»).
+Evidence does not raise confidence to `high` (the `high` rule stays as is) and never lowers confidence:
+absence of data is not a negative signal. Each rule that fires adds a note
+("12 published packages depend on it", "Weekday traffic is 1.8× weekend — human work rhythm").
 
-**Отношение будни/выходные** (`signals.weekdayRatio`): среднее очищенного ряда (шаг A) по будням /
-среднее по выходным за последние 8 полных недель пн–вс (UTC). `null`, если данных меньше 4 недель или если
-среднее по выходным 0, а по будням < 1. Если выходные 0, а будни ≥ 1, вместо 0 берём одну загрузку на все
-выходные, чтобы число оставалось конечным. На фикстурах: is-thirteen 3.6, lodash и request 1.5,
-react и zod 1.2–1.3, nervegraph 1.3 (но органика 2 → правило не срабатывает).
+**Weekday/weekend ratio** (`signals.weekdayRatio`): the mean of the cleaned series (step A) on weekdays /
+the mean on weekends over the last 8 full Mon-Sun weeks (UTC). `null` if there is less than 4 weeks of data or if
+the weekend mean is 0 and the weekday mean is < 1. If weekends are 0 and weekdays are ≥ 1, we use one download across all
+weekends instead of 0, so the number stays finite. On fixtures: is-thirteen 3.6, lodash and request 1.5,
+react and zod 1.2-1.3, the small package 1.3 (but organic 2, so the rule does not fire).
 
-Результат всегда показываем **диапазоном**, а не одной цифрой. К границам из шага B добавляем шум счёта:
-при точечной оценке `n` за неделю нижняя граница не выше `n − ⌈2·√n⌉`, верхняя не ниже `n + ⌈2·√max(n, 1)⌉`
-(≈ 95% пуассоновский интервал, `NOISE_Z = 2`), с обрезкой в `[0, cleaned_week]`. Иначе, когда все старые версии
-стоят на одном полу, диапазон схлопывается в точку. Для nervegraph (`n = 2`) получается `≈ 0–5 / нед`;
-для крупных пакетов полоса ничтожна по сравнению с объёмом.
+The result is always shown as a **range**, not a single number. We add count noise to the bounds from step B:
+for a point estimate of `n` per week, the lower bound is no higher than `n − ⌈2·√n⌉` and the upper bound is no lower than `n + ⌈2·√max(n, 1)⌉`
+(≈ a 95% Poisson interval, `NOISE_Z = 2`), clamped to `[0, cleaned_week]`. Otherwise, when all old versions
+sit on the same floor, the range collapses to a point. For the small package (`n = 2`) this gives `≈ 0–5 / week`;
+for large packages the band is negligible compared to the volume.
 
-## 4. Независимые доказательства использования (не загрузки)
+## 4. Independent evidence of usage (not downloads)
 
-| Сигнал | Источник | Что значит |
+| Signal | Source | What it means |
 |---|---|---|
-| Зависимые пакеты | `packages.ecosyste.ms`, `api.deps.dev` | Кто-то опубликовал пакет, который от тебя зависит |
-| Зависимые репозитории | `packages.ecosyste.ms` (`dependent_repos_count`) | Публичные проекты с пакетом в манифесте |
-| CDN-хиты | `data.jsdelivr.com/v1/stats/packages/npm/<pkg>` | Подключение на сайтах через jsDelivr |
-| GitHub | `api.github.com/repos/...` | Звёзды, форки, issues от **чужих** людей |
+| Dependent packages | `packages.ecosyste.ms`, `api.deps.dev` | Someone published a package that depends on yours |
+| Dependent repositories | `packages.ecosyste.ms` (`dependent_repos_count`) | Public projects with the package in their manifest |
+| CDN hits | `data.jsdelivr.com/v1/stats/packages/npm/<pkg>` | Use on websites via jsDelivr |
+| GitHub | `api.github.com/repos/...` | Stars, forks and issues from **other** people |
 
-Это нижняя граница: приватные репозитории и корпоративные проекты не видны никому.
+This is a lower bound: private repositories and corporate projects are invisible to everyone.
 
-Реализовано (`fetchEvidence` в `src/core/sources.ts`). Источники запрашиваются параллельно, сбой любого
-(сеть, 404, 403/429 лимит, битый JSON) обнуляет только его поле (`null` / `[]`):
+Implemented (`fetchEvidence` in `src/core/sources.ts`). Sources are requested in parallel, and a failure of any one
+(network, 404, 403/429 rate limit, malformed JSON) zeroes out only its own field (`null` / `[]`):
 - `packages.ecosyste.ms/api/v1/registries/npmjs.org/packages/<pkg>` → `dependent_packages_count`, `dependent_repos_count`;
-  `.../dependent_packages?per_page=5&sort=downloads&order=desc` → 5 самых скачиваемых зависимых пакетов.
-  Scoped-имена принимаются и как `@scope/name`, и как `@scope%2Fname`.
-- `data.jsdelivr.com/v1/stats/packages/npm/<pkg>?period=month` → `hits.total`. Здесь нужен «сырой» `/`:
-  `@scope%2Fname` даёт 400.
-- `api.github.com/repos/<owner>/<repo>` (репозиторий из поля `repository`, только github.com) → звёзды, форки,
-  открытые issues, `pushed_at`. Без токена 60 запросов в час, при 403/429 поле `null`.
-- Ссылка на поиск кода GitHub: `"\"<pkg>\"" path:package.json` (кавычки внутри фразы экранированы, поэтому
-  `zod` не совпадает с `zod-to-json-schema`).
+  `.../dependent_packages?per_page=5&sort=downloads&order=desc` → the 5 most downloaded dependent packages.
+  Scoped names are accepted both as `@scope/name` and as `@scope%2Fname`.
+- `data.jsdelivr.com/v1/stats/packages/npm/<pkg>?period=month` → `hits.total`. A raw `/` is required here:
+  `@scope%2Fname` returns 400.
+- `api.github.com/repos/<owner>/<repo>` (the repository from the `repository` field, github.com only) → stars, forks,
+  open issues, `pushed_at`. Without a token the limit is 60 requests per hour; on 403/429 the field is `null`.
+- A link to GitHub code search: `"\"<pkg>\"" path:package.json` (quotes inside the phrase are escaped, so
+  `zod` does not match `zod-to-json-schema`).
 
-Пороги для шага C: зависимых пакетов ≥ 5, репозиториев ≥ 10, CDN-хитов ≥ 1000 в месяц.
-Звёзды GitHub в уверенность не входят: они говорят об интересе, а не об установках.
+Thresholds for step C: dependent packages ≥ 5, repositories ≥ 10, CDN hits ≥ 1000 per month.
+GitHub stars do not feed into confidence: they indicate interest, not installs.
 
-## 5. Калибровка (этап 3)
+## 5. Calibration
 
-- **Пакет-канарейка.** Публикуем пустой пакет `humanloads-canary`, которым никто не пользуется, и регулярно
-  выпускаем версию. Всё, что он получает, — чистый бот-шум. Это эталон для `f` и для размера всплеска.
-  Сбор данных — отдельный скрипт (cron в CI); результат публикуется в `public/data/calibration.json`
-  (`floorPerVersion`, `updated`, `source`; размер всплеска пока не измеряем — модель его не использует). Модель только читает этот файл:
-  `estimate(data, { calibration })` берёт `floorPerVersion` вместо константы 3, когда пол пакета не измерен (шаг B.4).
-- **Контрольная группа.** 20–30 пакетов с известным реальным использованием (свои, популярные, мёртвые).
-  На них проверяем, что модель не занижает популярные и не завышает мёртвые.
-- **Будни/выходные.** У живых разработчиков есть недельный ритм, у ботов его нет.
-  Если у ряда виден ритм, это дополнительный аргумент за органику (реализовано, см. шаг C).
-  Оговорка: CI тоже работает по будням, поэтому ритм поднимает только `low → medium`, а не до `high`.
+- **Canary package.** We publish an empty package `humanloads-canary` that nobody uses, and release a new
+  version on a regular basis. Everything it receives is pure bot noise. It is the reference for `f` and for the spike size.
+  Data collection is a separate script (a CI cron job); the result is published to `public/data/calibration.json`
+  (`floorPerVersion`, `updated`, `source`; we do not measure the spike size yet, the model does not use it). The model only reads this file:
+  `estimate(data, { calibration })` takes `floorPerVersion` instead of the constant 3 when the package's own floor is not measured (step B.4).
+- **Control group.** 20-30 packages with known real usage (our own, popular, dead).
+  We use them to check that the model does not underestimate popular packages or overestimate dead ones.
+- **Weekdays/weekends.** Live developers have a weekly rhythm, bots do not.
+  If a series shows a rhythm, it is an additional argument for organic traffic (implemented, see step C).
+  Caveat: CI also runs on weekdays, so the rhythm only raises `low → medium`, never to `high`.
 
-## 6. Известные ограничения
-- Закрытое использование невидимо в принципе.
-- Накрутку прямыми запросами отличить нельзя.
-- Пол `f` у очень популярных пакетов теряется в шуме. Для них модель почти не меняет цифру, и это корректно.
-- Данные npm отстают на 1–2 дня.
+## 6. Known limitations
+- Private usage is invisible by definition.
+- Inflated counts from direct requests cannot be told apart.
+- The floor `f` of very popular packages gets lost in the noise. For them the model barely changes the number, and that is correct.
+- npm data lags by 1-2 days.

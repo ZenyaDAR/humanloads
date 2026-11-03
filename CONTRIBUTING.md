@@ -40,6 +40,20 @@ npm run build
 - **Accessibility and both themes.** Check new UI in light and dark mode, at phone width, and with the keyboard.
 - Add a line to [`CHANGELOG.md`](CHANGELOG.md) for anything a user would notice.
 
+## How the site is built and deployed
+
+- `.github/workflows/deploy.yml` tests, builds and publishes `dist/` to GitHub Pages. No build output is committed.
+- Live data (`public/data/`, `public/badges/`) is fetched by `npm run data` (about 150 packages, several minutes).
+  It runs at most once a day: the nightly schedule fetches it and caches it, and pushes reuse that day's cache.
+  To refetch on demand: Actions → Deploy to GitHub Pages → Run workflow → tick "Refetch live data".
+- Pushes that only touch Markdown or GitHub templates don't deploy.
+- The site URL is one setting, `SITE_URL` (`site.config.ts`, overridable by a repository variable). Canonical links,
+  Open Graph, sitemap, robots.txt, llms.txt, JSON-LD, badges and the Vite base path all derive from it.
+- GitHub disables scheduled workflows after 60 days without repository activity; a push or a manual run restarts them.
+- The calibration canary (`canary/`, `.github/workflows/canary.yml`) runs only when the repository variable
+  `CANARY_ENABLED` is `true`. The first publish needs an `NPM_TOKEN` secret; after that, configure npm trusted
+  publishing for that workflow and delete the secret.
+
 ## Code of conduct
 
 This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).

@@ -11,7 +11,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isValidPackageName } from '../src/core/sources.ts';
 import { customDomain, resolveSiteUrl } from '../site.config.ts';
 import { METHODOLOGY_PATH } from '../src/core/methodology.ts';
-import { homeHtml, llmsTxt, methodologyHtml, notFoundHtml, prerenderHtml, robotsTxt, sitemapXml } from './data-lib.ts';
+import { comparePath } from '../src/core/seo.ts';
+import {
+  compareHtml, homeHtml, llmsTxt, methodologyHtml, notFoundHtml, prerenderHtml, robotsTxt, sitemapXml,
+} from './data-lib.ts';
 
 const SITE = resolveSiteUrl();
 const RELATED = 6;
@@ -24,12 +27,25 @@ const tracked = JSON.parse(await readFile(new URL('../data/tracked.json', import
 const summary = await readJson(new URL('data/summary.json', dist));
 const featured = await readJson(new URL('data/featured.json', dist));
 const packages = summary?.packages ?? {};
+const allPairs = JSON.parse(await readFile(new URL('../data/compare.json', import.meta.url), 'utf8'))
+  .filter((p) => p.length >= 2 && p.length <= 3 && p.every(isValidPackageName));
+// Only pairs with numbers for every package get a page: a compare page without numbers is thin content.
+const pairs = allPairs.filter((p) => p.every((n) => packages[n]));
 
 await writeFile(new URL('404.html', dist), notFoundHtml(shell));
-await writeFile(new URL('index.html', dist), homeHtml(shell, SITE, featured));
+await writeFile(new URL('index.html', dist), homeHtml(shell, SITE, featured, pairs));
 // Written before the package pages, so a package named "docs" is skipped as a clash below.
 await mkdir(new URL('docs/', dist), { recursive: true });
 await writeFile(new URL(`${METHODOLOGY_PATH}.html`, dist), methodologyHtml(shell, SITE));
+
+// Also before the package pages: a package named "compare" would clash with this folder.
+for (const [i, p] of pairs.entries()) {
+  const others = Array.from({ length: Math.min(6, pairs.length - 1) }, (_, k) => pairs[(i + 1 + k) % pairs.length]);
+  const html = compareHtml(shell, p, p.map((n) => packages[n]), SITE, { generated: summary?.generated, others });
+  const file = new URL(`${comparePath(p)}.html`, dist);
+  await mkdir(new URL('.', file), { recursive: true });
+  await writeFile(file, html);
+}
 
 // Biggest first: the sitemap, llms.txt and the "Other packages" links read in that order.
 const names = [...new Set([...tracked, ...Object.keys(packages)])]
@@ -45,22 +61,26 @@ const names = [...new Set([...tracked, ...Object.keys(packages)])]
 for (const [i, name] of names.entries()) {
   // The next few names, wrapping around: every page links to others and gets links back.
   const related = Array.from({ length: Math.min(RELATED, names.length - 1) }, (_, k) => names[(i + 1 + k) % names.length]);
-  const html = prerenderHtml(shell, name, packages[name], SITE, { generated: summary?.generated, related });
+  const comparisons = pairs.filter((p) => p.includes(name));
+  const html = prerenderHtml(shell, name, packages[name], SITE, { generated: summary?.generated, related, comparisons });
   const file = new URL(`${name}.html`, dist);
   await mkdir(new URL('.', file), { recursive: true });
   await writeFile(file, html);
 }
 
-await writeFile(new URL('sitemap.xml', dist), sitemapXml([SITE, SITE + METHODOLOGY_PATH, ...names.map((n) => SITE + n)], summary?.generated));
+await writeFile(new URL('sitemap.xml', dist), sitemapXml(
+    [SITE, SITE + METHODOLOGY_PATH, ...pairs.map((p) => SITE + comparePath(p)), ...names.map((n) => SITE + n)],
+    summary?.generated,
+  ));
 await writeFile(new URL('robots.txt', dist), robotsTxt(SITE));
 await writeFile(
   new URL('llms.txt', dist),
-  llmsTxt(SITE, names.map((name) => ({ name, row: packages[name] })), summary?.generated),
+  llmsTxt(SITE, names.map((name) => ({ name, row: packages[name] })), summary?.generated, pairs),
 );
 const domain = customDomain(SITE);
 if (domain) await writeFile(new URL('CNAME', dist), domain + '\n');
 
 console.log(
-  `prerender: ${SITE} home + methodology + ${names.length} package pages${summary ? '' : ' (no summary.json, generic text)'}` +
+  `prerender: ${SITE} home + methodology + ${pairs.length} comparisons + ${names.length} package pages${summary ? '' : ' (no summary.json, generic text)'}` +
     `, sitemap, robots.txt, llms.txt${domain ? `, CNAME ${domain}` : ''}`,
 );

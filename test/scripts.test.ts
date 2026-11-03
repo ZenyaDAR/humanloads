@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   badgeFor, calibrate, compactCount, esc, homeHtml, llmsTxt, notFoundHtml, poolFailure, prerenderHtml, robotsTxt, safeName,
-  selectFeatured, sitemapXml, methodologyHtml,
+  selectFeatured, sitemapXml, methodologyHtml, compareHtml,
 } from '../scripts/data-lib.ts';
 import { customDomain, resolveSiteUrl } from '../site.config.ts';
 import type { Confidence, FeaturedRow, RawPackageData } from '../src/core/types.ts';
@@ -158,18 +158,23 @@ test('prerender: per-package tags replace the shell ones and og:image stays', ()
   assert.doesNotMatch(html, /content="generic"/);
   assert.match(html, /og:image" content="og.svg"/);
   assert.match(html, /<meta property="og:url" content="https:\/\/example.test\/pkg" \/>/);
-  assert.match(html, /~400 human installs a week \(range 400–400, high confidence\) vs 1,234 npm downloads/);
+  assert.match(html, /npm counts 1,234 downloads a week; about 400 look like real human installs \(high confidence\)/);
+});
+
+test('prerender: big numbers are compact in the description', () => {
+  const html = prerenderHtml(SHELL, 'pkg', { ...row('pkg', 446_662_406, 446_650_334), low: 446_608_065, high: 446_662_406 }, 'https://example.test/');
+  assert.match(html, /npm counts 446\.7M downloads a week; about 446\.6M–446\.7M look like/);
 });
 
 test('prerender: without summary numbers the description is generic', () => {
   const html = prerenderHtml(SHELL, 'pkg', undefined, 'https://example.test/');
-  assert.match(html, /How many of pkg&#39;s npm downloads are real human installs\?/);
+  assert.match(html, /How many people really use pkg\? humanloads separates real human installs/);
 });
 
 test('prerender: "$&" in a name is not expanded by String#replace', () => {
   // Names are validated before this point, but the title replacement must stay literal regardless.
   const html = prerenderHtml(SHELL, '$&x', undefined, 'https://example.test/');
-  assert.match(html, /<title>\$&amp;x: /);
+  assert.match(html, /<title>\$&amp;x npm downloads/);
 });
 
 const ldOf = (html: string) =>
@@ -245,4 +250,23 @@ test('methodologyHtml: canonical under the base, static article, TechArticle + F
   const ld = JSON.parse(html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)![1]);
   const types = ld['@graph'].map((n: { '@type': string }) => n['@type']);
   assert.deepEqual(types, ['WebSite', 'TechArticle', 'FAQPage', 'BreadcrumbList']);
+});
+
+test('compareHtml: canonical, numbers side by side, answer by humans, JSON-LD about both', () => {
+  const html = compareHtml(SHELL, ['a', 'b'], [row('a', 5000, 4000, 'high'), row('b', 9000, 1000, 'medium')], 'https://example.test/sub/', {
+    others: [['c', 'd']],
+  });
+  assert.match(html, /<link rel="canonical" href="https:\/\/example.test\/sub\/compare\/a,b" \/>/);
+  assert.match(html, /<title>a vs b: npm downloads and real human installs/);
+  assert.match(html, /npm counts 5,000 vs 9,000 downloads a week; estimated real human installs are 4,000 vs 1,000/);
+  assert.match(html, /<strong>a<\/strong> is ahead of b by about 4\.0×/);
+  assert.match(html, /href="\/sub\/compare\/c,d"/);
+  const ld = JSON.parse(html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)![1]);
+  assert.deepEqual(ld['@graph'][1].about.map((x: { name: string }) => x.name), ['a', 'b']);
+});
+
+test('compareHtml: a missing number falls back to generic text without a table', () => {
+  const html = compareHtml(SHELL, ['a', 'b'], [row('a', 5000, 4000), undefined], 'https://example.test/');
+  assert.doesNotMatch(html, /cmp-table/);
+  assert.match(html, /which is more popular\? npm weekly downloads compared/);
 });

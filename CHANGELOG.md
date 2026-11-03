@@ -5,6 +5,26 @@ grouped by date rather than by version. Daily data refreshes are not listed.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (Added, Changed, Fixed, Removed).
 
+## 2026-11-04
+
+### Added
+
+- Popular comparisons (react vs vue, jest vs vitest, express vs fastify and more) as prerendered pages, linked
+  from the homepage and from each package page.
+- GitHub link in the header.
+
+### Changed
+
+- Search-friendly page titles and descriptions ("zod npm downloads vs real human installs", "How many people
+  really use zod?"), with compact numbers.
+- Live data is fetched at most once a day; pushes on the same day reuse it.
+- No layout shift when the app takes over a prerendered page.
+
+### Fixed
+
+- Badge preview colors now pass contrast checks.
+- No more 404 in the console for the calibration file.
+
 ## 2026-11-03: first public release
 
 ### Added

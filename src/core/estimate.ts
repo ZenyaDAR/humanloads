@@ -1,6 +1,6 @@
 import type { Confidence, DailyEstimate, Estimate, EstimateOptions, Publish, RawPackageData, VersionRow } from './types.ts';
 
-// ponytail: constant guess (matches the floor observed on nervegraph); used only when neither the package's
+// ponytail: constant guess (matches the floor observed on a small real package); used only when neither the package's
 // own floor nor canary calibration (opts.calibration) is available.
 export const GLOBAL_FLOOR_PER_VERSION = 3;
 

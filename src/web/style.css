@@ -206,6 +206,21 @@ h1, h2 { margin: 0; font-weight: 600; }
   cursor: pointer;
 }
 .theme-toggle:hover { color: var(--ink); border-style: solid; }
+.cmp-links-sec { margin-top: 48px; }
+.cmp-links { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 8px 10px; }
+.head-tools { display: flex; align-items: center; gap: 8px; }
+.gh-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 500 0.8rem var(--mono);
+  color: var(--ink-soft);
+  text-decoration: none;
+  padding: 4px 10px;
+  border: 1.5px dashed var(--ink-soft);
+  border-radius: var(--sketch);
+}
+.gh-link:hover { color: var(--ink); border-style: solid; }
 
 /* ---------- masthead ---------- */
 
@@ -613,9 +628,10 @@ table[style*='--floor'] td.bar-col .vbar::after {
 .shield { display: inline-flex; font: 11px/20px Verdana, Geneva, sans-serif; color: #fff; border-radius: 3px; overflow: hidden; text-shadow: 0 1px 0 rgba(1, 1, 1, 0.3); white-space: nowrap; }
 .shield-l, .shield-r { padding: 0 6px; }
 .shield-l { background: #555; }
-.shield-r { background: #9f9f9f; }
-.shield-brightgreen { background: #4c1; }
-.shield-yellow { background: #dfb317; }
+/* Darker than shields.io's own #9f9f9f / #4c1 / #dfb317 so the white text passes 4.5:1; same hues. */
+.shield-r { background: #707070; }
+.shield-brightgreen { background: #2E7D0F; }
+.shield-yellow { background: #8A6A00; }
 .badge-more { margin-top: 14px; }
 .badge-more summary { cursor: pointer; width: fit-content; font-size: 0.85rem; color: var(--ink-soft); }
 .badge-md {
@@ -636,6 +652,8 @@ table[style*='--floor'] td.bar-col .vbar::after {
 .compare .pkg-name { font-size: clamp(2rem, 7vw, 3rem); }
 .vs { font-size: 1.6rem; color: var(--ink-soft); }
 .compare .chart-fig { margin-top: 12px; }
+/* Chart placeholder: same height as the drawn chart, clamp(230, 48% of width, 340) in chart.ts. */
+.chart-fig .sk-chart { height: auto; aspect-ratio: 100 / 48; min-height: 230px; max-height: 340px; }
 .cmp-table tbody th { overflow-wrap: normal; }
 .cmp-table tbody th a { font-weight: 600; }
 .cmp-table .key-line { width: 18px; margin-right: 8px; vertical-align: middle; }

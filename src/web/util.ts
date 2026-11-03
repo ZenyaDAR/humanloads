@@ -1,6 +1,7 @@
 // Small helpers shared by the views. No DOM framework: views build HTML strings,
 // and every third-party string goes through esc() first.
 import { METHODOLOGY_PATH } from '../core/methodology.ts';
+import { REPO_LINK_HTML } from '../core/seo.ts';
 
 export const BASE = import.meta.env.BASE_URL; // path part of SITE_URL, e.g. '/'
 
@@ -147,6 +148,15 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
 });
 
 const THEME_ICON: Record<Theme, string> = { system: '◐', light: '☀', dark: '☾' };
+
+// Right side of every header: the GitHub link and the theme toggle.
+export function headTools(): HTMLElement {
+  const tools = document.createElement('div');
+  tools.className = 'head-tools';
+  tools.innerHTML = REPO_LINK_HTML;
+  tools.append(themeToggle());
+  return tools;
+}
 
 export function themeToggle(): HTMLButtonElement {
   const btn = document.createElement('button');

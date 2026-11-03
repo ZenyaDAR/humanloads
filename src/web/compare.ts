@@ -3,18 +3,30 @@ import { PackageNotFoundError, type Estimate, type RawPackageData } from '../cor
 import { mountChart } from './chart.ts';
 import { calibration, getData } from './package.ts';
 import { BASE, esc, fmt, METHODOLOGY_URL, pkgHref } from './util.ts';
+import { compareLinksHtml } from '../core/seo.ts';
+import COMPARE_PAIRS from '../../data/compare.json';
 
 // Ballpoint blue, berry, green ink: each checked for 3:1 against paper in both themes (see style.css).
 const COLORS = ['--marker', '--berry', '--green'];
 
 const title = (names: string[]) => names.map((n) => `<span class="pkg-name">${esc(n)}</span>`).join(' <span class="vs hand">vs</span> ');
 
+// Same caption in the skeleton, the live page and the prerendered page (scripts/data-lib.ts), so the
+// chart doesn't move when the data arrives (CLS).
+const caption = (names: string[]) => `<figcaption>
+            <h2 class="section-title">Estimated humans, week by week</h2>
+            <ul class="legend">
+              ${names.map((n, i) => `<li><span class="key key-line" style="--c:var(${COLORS[i]})" aria-hidden="true"></span>${esc(n)}</li>`).join('')}
+              <li><span class="key key-npm" aria-hidden="true"></span>npm downloads (same color, dashed)</li>
+            </ul>
+          </figcaption>`;
+
 export function renderCompare(view: HTMLElement, names: string[]): void {
   view.innerHTML = `
-    <div class="skeleton" aria-busy="true" role="status">
-      <h1 class="hand" tabindex="-1">measuring ${esc(names.join(', '))}…</h1>
-      <div class="sk sk-chart"></div>
-    </div>`;
+    <article class="pkg compare" aria-busy="true">
+      <header class="pkg-head"><h1 tabindex="-1">${title(names)}</h1></header>
+      <figure class="chart-fig">${caption(names)}<div class="sk sk-chart" role="status" aria-label="Loading the chart"></div></figure>
+    </article>`;
   void load(view, names);
 }
 
@@ -44,18 +56,13 @@ async function load(view: HTMLElement, names: string[]): Promise<void> {
       <article class="pkg compare">
         <header class="pkg-head"><h1 tabindex="-1">${title(names)}</h1></header>
         <figure class="chart-fig">
-          <figcaption>
-            <h2 class="section-title">Estimated humans, week by week</h2>
-            <ul class="legend">
-              ${names.map((n, i) => `<li><span class="key key-line" style="--c:var(${COLORS[i]})" aria-hidden="true"></span>${esc(n)}</li>`).join('')}
-              <li><span class="key key-npm" aria-hidden="true"></span>npm downloads (same color, dashed)</li>
-            </ul>
-          </figcaption>
+          ${caption(names)}
           <div class="chart"></div>
           <p class="fineprint">Square-root vertical scale. Weeks are aligned on the newest one.</p>
         </figure>
         ${table(names, ests)}
         <p class="method"><a href="${METHODOLOGY_URL}">How we estimate this <span aria-hidden="true">→</span></a></p>
+        ${compareLinksHtml(BASE, COMPARE_PAIRS.filter((p) => p.join() !== names.join()).slice(0, 8), esc, 'More comparisons')}
       </article>`;
     mountChart(
       view.querySelector<HTMLElement>('.chart')!,

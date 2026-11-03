@@ -4,7 +4,8 @@ import type { Calibration, FeaturedRow, RawPackageData, ShieldsBadge } from '../
 import { addDays, median } from '../src/core/estimate.ts';
 import { esc } from '../src/core/html.ts';
 import {
-  HOME_DESCRIPTION, HOME_TITLE, REPO_URL, SITE_NAME, packageDescription, packageTitle,
+  HOME_DESCRIPTION, HOME_TITLE, REPO_LINK_HTML, REPO_URL, SITE_NAME, compareDescription, compareLinksHtml, comparePath,
+  compareTitle, packageDescription, packageTitle,
 } from '../src/core/seo.ts';
 import {
   METHODOLOGY_DESCRIPTION, METHODOLOGY_FAQ, METHODOLOGY_PATH, METHODOLOGY_SECTIONS, METHODOLOGY_TITLE, methodologyBody,
@@ -139,8 +140,14 @@ export function notFoundHtml(shell: string): string {
     .replace(/<title>/, () => '<meta name="robots" content="noindex" />\n    <title>');
 }
 
+// Inert stand-ins for the controls the SPA builds (search box, theme toggle), with the same classes and
+// sizes, so nothing moves when the app takes over (CLS). Hidden from assistive tech and not focusable.
+const searchStandIn = (id: 'top' | 'home', placeholder: string) =>
+  `<form class="search search-${id}" inert aria-hidden="true"><input type="text" placeholder="${placeholder}" /><button type="button">Look</button><p class="search-hint"></p></form>`;
+const headTools = `<div class="head-tools">${REPO_LINK_HTML}<span class="theme-toggle" inert aria-hidden="true">◐ system</span></div>`;
+
 const masthead = (base: string) =>
-  `<header class="masthead"><a class="logo" href="${esc(base)}">human<span>loads</span></a></header>`;
+  `<header class="masthead"><a class="logo" href="${esc(base)}">human<span>loads</span></a>${searchStandIn('top', 'search a package…')}${headTools}</header>`;
 
 const METHOD_STEPS = `<ol>
         <li>Cut the spike every new version gets from mirrors in its first days.</li>
@@ -155,6 +162,7 @@ function website(site: string) {
 export interface PackagePageOpts {
   generated?: string; // summary.json timestamp
   related?: string[]; // other prerendered packages to link to
+  comparisons?: string[][]; // prerendered compare pages that include this package
 }
 
 export function prerenderHtml(
@@ -187,7 +195,7 @@ export function prerenderHtml(
       </section>
       <p class="fineprint">Snapshot from the daily build${asOf ? ` of ${esc(asOf)}` : ''}, last 7 days of npm data. With JavaScript on, this page recomputes it live from the npm API.</p>
       <section>
-        <h2 class="section-title">What these numbers mean</h2>
+        <h2 class="section-title">How many people actually use ${esc(name)}?</h2>
         <p>npm counted ${fmt(r.npmWeekly)} downloads of ${esc(name)} in the last 7 days. That count includes every tarball fetch:
           registry mirrors, security scanners, CI pipelines and crawlers as well as people.
           humanloads estimates that about ${fmt(r.organicWeekly)} of them (likely range ${range(r)}) were real human installs,
@@ -215,6 +223,7 @@ export function prerenderHtml(
         ${METHOD_STEPS}
         <p class="method"><a href="${esc(base + METHODOLOGY_PATH)}">Read the methodology <span aria-hidden="true">→</span></a></p>
       </section>
+      ${compareLinksHtml(base, opts.comparisons ?? [], esc, `Compare ${name}`)}
       ${
         related.length
           ? `<section>
@@ -282,7 +291,7 @@ export interface Featured {
 }
 
 // index.html: the home page with its featured lists as static links, so crawlers find the package pages.
-export function homeHtml(shell: string, site: string, featured: Featured | null): string {
+export function homeHtml(shell: string, site: string, featured: Featured | null, pairs: string[][] = []): string {
   const base = new URL(site).pathname;
   const section = (rows: FeaturedRow[] | undefined, title: string, note: string, bots: boolean) =>
     Array.isArray(rows) && rows.length
@@ -293,16 +302,24 @@ export function homeHtml(shell: string, site: string, featured: Featured | null)
       : '';
   const asOf = day(featured?.generated);
   const body = `<div class="view">
-    <div class="home-top"></div>
+    <div class="home-top">${headTools}</div>
     <section class="home">
       <h1 class="home-title" tabindex="-1">human<span class="home-title-mark">loads</span></h1>
       <p class="home-pitch">npm counts every tarball fetch: mirrors, scanners, CI. <span class="hl">We estimate the humans.</span></p>
+      <div class="home-search">${searchStandIn('home', 'package name, e.g. zod')}</div>
+      ${
+        featured?.humans?.length
+          ? `<p class="home-examples"><span class="hand">try one</span>
+        ${featured.humans.slice(0, 4).map((r) => `<a class="tag" href="${esc(base + r.name)}">${esc(r.name)}</a>`).join('')}</p>`
+          : ''
+      }
     </section>
     <div class="featured">
       ${section(featured?.humans, 'Most real humans', 'top by estimated human installs', false)}
       ${section(featured?.inflated, 'Most bot-inflated', 'where npm counts robots the most', true)}
       ${asOf ? `<p class="fineprint">Updated ${esc(asOf)}. Weekly numbers, last 7 days.</p>` : ''}
     </div>
+    ${compareLinksHtml(base, pairs, esc)}
     <aside class="home-note">
       <p class="hand">how it works</p>
       ${METHOD_STEPS}
@@ -334,6 +351,112 @@ export function homeHtml(shell: string, site: string, featured: Featured | null)
     ],
   };
   return withPage(shell, { title: HOME_TITLE, description: HOME_DESCRIPTION, url: site, body, jsonLd: ld });
+}
+
+const COMPARE_COLORS = ['--marker', '--berry', '--green']; // same as src/web/compare.ts
+
+// compare/<a>,<b>.html: a popular pair with the build-time numbers side by side; the SPA then draws the chart.
+export function compareHtml(
+  shell: string,
+  names: string[],
+  rows: (FeaturedRow | undefined)[],
+  site: string,
+  opts: { generated?: string; others?: string[][] } = {},
+): string {
+  const base = new URL(site).pathname;
+  const path = comparePath(names);
+  const url = site + path;
+  const title = compareTitle(names);
+  const description = compareDescription(names, rows);
+  const asOf = day(opts.generated);
+  const vs = names.map(esc).join(' vs ');
+  const known = rows.every(Boolean) ? (rows as FeaturedRow[]) : null;
+
+  // "Which is more popular?" answered in one sentence, by estimated humans rather than raw downloads.
+  let answer = '';
+  if (known) {
+    const order = names.map((n, i) => ({ n, r: known[i] })).sort((a, b) => b.r.organicWeekly - a.r.organicWeekly);
+    const [top, next] = order;
+    const ratio = next.r.organicWeekly > 0 ? top.r.organicWeekly / next.r.organicWeekly : null;
+    answer = `<p>By estimated real human installs, <strong>${esc(top.n)}</strong> is ahead of ${esc(next.n)}${
+      ratio && ratio >= 1.1 ? ` by about ${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}×` : ', and the two are close'
+    }: about ${fmt(top.r.organicWeekly)} vs ${fmt(next.r.organicWeekly)} a week. npm's raw counts are
+      ${known.map((r, i) => `${fmt(r.npmWeekly)} for ${esc(names[i])}`).join(' and ')}, which include mirrors, scanners and crawlers.</p>`;
+  }
+
+  const table = known
+    ? `<div class="table-wrap"><table class="cmp-table">
+        <thead><tr><th scope="col">package</th><th scope="col" class="num">npm / week</th><th scope="col" class="num">humans / week</th>
+          <th scope="col" class="num">inflation</th><th scope="col">confidence</th></tr></thead>
+        <tbody>${known
+          .map(
+            (r, i) => `<tr><th scope="row"><a href="${esc(base + names[i])}">${esc(names[i])}</a></th>
+            <td class="num" data-label="npm / week">${fmt(r.npmWeekly)}</td>
+            <td class="num above" data-label="humans / week">${range(r)}</td>
+            <td class="num" data-label="inflation">${botShare(r.inflation)}</td>
+            <td data-label="confidence"><span class="pill pill-${esc(r.confidence)}">${esc(r.confidence)}</span></td></tr>`,
+          )
+          .join('')}</tbody>
+      </table></div>
+      <p class="fineprint">Snapshot from the daily build${asOf ? ` of ${esc(asOf)}` : ''}, last 7 days of npm data. With JavaScript on, this page recomputes it live with a 12-month chart.</p>`
+    : '';
+
+  const body = `<div class="view">
+    ${masthead(base)}
+    <article class="pkg compare">
+      <header class="pkg-head"><h1 tabindex="-1">${names.map((n) => `<span class="pkg-name">${esc(n)}</span>`).join(' <span class="vs hand">vs</span> ')}</h1></header>
+      <figure class="chart-fig">
+        <figcaption>
+          <h2 class="section-title">Estimated humans, week by week</h2>
+          <ul class="legend">
+            ${names.map((n, i) => `<li><span class="key key-line" style="--c:var(${COMPARE_COLORS[i]})" aria-hidden="true"></span>${esc(n)}</li>`).join('')}
+            <li><span class="key key-npm" aria-hidden="true"></span>npm downloads (same color, dashed)</li>
+          </ul>
+        </figcaption>
+        <div class="sk sk-chart" aria-hidden="true"></div>
+        <p class="fineprint">The 12-month chart is drawn in the browser from the npm API.</p>
+      </figure>
+      <section class="versions">
+        <h2 class="section-title">${vs}: which is more popular?</h2>
+        ${table}
+        ${answer || `<p>npm's weekly download counts for ${vs} compared with estimated real human installs, week by week.</p>`}
+      </section>
+      <section>
+        <h2 class="section-title">How the estimate works</h2>
+        ${METHOD_STEPS}
+        <p class="method"><a href="${esc(base + METHODOLOGY_PATH)}">Read the methodology <span aria-hidden="true">→</span></a></p>
+      </section>
+      ${compareLinksHtml(base, opts.others ?? [], esc, 'More comparisons')}
+    </article>
+  </div>`;
+
+  const ld = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      website(site),
+      {
+        '@type': 'WebPage',
+        '@id': url,
+        url,
+        name: title,
+        description,
+        inLanguage: 'en',
+        isPartOf: { '@id': `${site}#website` },
+        breadcrumb: { '@id': `${url}#breadcrumb` },
+        about: names.map((n) => ({ '@type': 'SoftwareSourceCode', name: n, url: `https://www.npmjs.com/package/${n}` })),
+        ...(opts.generated && { dateModified: opts.generated }),
+      },
+      {
+        '@type': 'BreadcrumbList',
+        '@id': `${url}#breadcrumb`,
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: SITE_NAME, item: site },
+          { '@type': 'ListItem', position: 2, name: names.join(' vs '), item: url },
+        ],
+      },
+    ],
+  };
+  return withPage(shell, { title, description, url, body, jsonLd: ld });
 }
 
 // docs/methodology.html: the English methodology, as an article with an FAQ.
@@ -408,7 +531,10 @@ Sitemap: ${site}sitemap.xml
 }
 
 // https://llmstxt.org: a Markdown index for language models.
-export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }[], generated?: string): string {
+export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }[], generated?: string, pairs: string[][] = []): string {
+  const compares = pairs.length
+    ? `\n## Comparisons\n\n${pairs.map((p) => `- [${p.join(' vs ')}](${site}${comparePath(p)})`).join('\n')}\n`
+    : '';
   const asOf = day(generated);
   const list = pages
     .map(
@@ -448,7 +574,7 @@ export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }
 ## Package pages
 
 ${list}
-
+${compares}
 ## Optional
 
 - [Source code](${REPO_URL})

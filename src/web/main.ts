@@ -67,7 +67,13 @@ function route(userNavigation: boolean): void {
           <p><a href="${BASE}">Search for a package</a></p>
         </section>`;
     } else if (r.kind === 'compare') {
-      setPageMeta(compareTitle(r.names), compareDescription(r.names), `compare/${r.names.join(',')}`);
+      const path = `compare/${r.names.join(',')}`;
+      setPageMeta(compareTitle(r.names), compareDescription(r.names), path);
+      // Same description as the prerendered page when every package has build-time numbers.
+      void fetchStatic<{ packages?: Record<string, FeaturedRow> }>('data/summary.json').then((s) => {
+        const rows = r.names.map((n) => s?.packages?.[n]);
+        if (id === routeId) setPageMeta(compareTitle(r.names), compareDescription(r.names, rows), path);
+      });
       renderCompare(body, r.names);
     } else {
       const name = r.name;

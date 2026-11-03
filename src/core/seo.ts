@@ -4,28 +4,58 @@ import type { FeaturedRow } from './types.ts';
 
 export const SITE_NAME = 'humanloads';
 export const REPO_URL = 'https://github.com/ZenyaDAR/humanloads';
-export const HOME_TITLE = 'humanloads: how many humans use an npm package?';
-export const HOME_DESCRIPTION =
-  'npm counts every tarball fetch: mirrors, scanners, CI. humanloads estimates the real human installs behind an npm package, with a range and a confidence level.';
 
-const fmt = (n: number) => Math.round(n).toLocaleString('en-US');
+// Header link to the source, shared by the SPA header and the prerendered pages. Octicon "mark-github".
+export const REPO_LINK_HTML = `<a class="gh-link" href="${REPO_URL}" rel="noopener"><svg aria-hidden="true" viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>`;
+// Titles lead with the phrases people search for ("<pkg> npm downloads", "how many people use <pkg>").
+export const HOME_TITLE = 'Real npm download stats, minus the bots · humanloads';
+export const HOME_DESCRIPTION =
+  'How many people really use an npm package? npm counts every tarball fetch: mirrors, scanners, CI. humanloads estimates the real weekly human installs, with a range and a confidence level.';
+
+// "446,650,334" reads badly in a search snippet; big numbers go compact ("447M").
+const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+const fmt = (n: number) => (n >= 10_000 ? compact.format(n) : Math.round(n).toLocaleString('en-US'));
+const range = (low: number, high: number) => (fmt(low) === fmt(high) ? fmt(low) : `${fmt(low)}–${fmt(high)}`);
 
 export function packageTitle(name: string): string {
-  return `${name}: real human installs vs npm downloads · ${SITE_NAME}`;
+  return `${name} npm downloads vs real human installs · ${SITE_NAME}`;
 }
 
 // With build-time numbers (summary.json) the description quotes them; without, it stays generic.
 export function packageDescription(name: string, r?: Pick<FeaturedRow, 'organicWeekly' | 'low' | 'high' | 'confidence' | 'npmWeekly'>): string {
   return r
-    ? `${name}: ~${fmt(r.organicWeekly)} human installs a week (range ${fmt(r.low)}–${fmt(r.high)}, ${r.confidence} confidence) ` +
-        `vs ${fmt(r.npmWeekly)} npm downloads. The rest is mirrors, scanners and crawlers.`
-    : `How many of ${name}'s npm downloads are real human installs? humanloads separates people from mirrors, scanners and crawlers.`;
+    ? `How many people really use ${name}? npm counts ${fmt(r.npmWeekly)} downloads a week; about ${range(r.low, r.high)} look like ` +
+        `real human installs (${r.confidence} confidence). The rest is mirrors, scanners and crawlers.`
+    : `How many people really use ${name}? humanloads separates real human installs from the mirrors, scanners and crawlers in its npm download count.`;
 }
 
 export function compareTitle(names: string[]): string {
-  return `${names.join(' vs ')}: human installs compared · ${SITE_NAME}`;
+  return `${names.join(' vs ')}: npm downloads and real human installs · ${SITE_NAME}`;
 }
 
-export function compareDescription(names: string[]): string {
-  return `${names.join(' vs ')}: npm weekly downloads compared with estimated real human installs, week by week.`;
+export const comparePath = (names: string[]) => `compare/${names.join(',')}`;
+
+// "Popular comparisons" links (data/compare.json), shared by the SPA home and the prerendered pages.
+// `esc` is passed in so this module stays free of DOM and Node imports.
+export function compareLinksHtml(base: string, pairs: string[][], esc: (s: string) => string, title = 'Popular comparisons'): string {
+  if (!pairs.length) return '';
+  return `<section class="cmp-links-sec">
+      <h2 class="section-title">${esc(title)}</h2>
+      <ul class="cmp-links">${pairs
+        .map((p) => `<li><a class="tag" href="${esc(base + comparePath(p))}">${p.map(esc).join(' vs ')}</a></li>`)
+        .join('')}</ul>
+    </section>`;
+}
+
+type CompareRow = Pick<FeaturedRow, 'organicWeekly' | 'npmWeekly'>;
+
+// With numbers for every package the description quotes them, in the same order as the names.
+export function compareDescription(names: string[], rows?: (CompareRow | undefined)[]): string {
+  const vs = names.join(' vs ');
+  if (rows?.length === names.length && rows.every(Boolean)) {
+    const per = (pick: (r: CompareRow) => number) => (rows as CompareRow[]).map((r) => fmt(pick(r))).join(' vs ');
+    return `${vs}: which is more popular? npm counts ${per((r) => r.npmWeekly)} downloads a week; ` +
+      `estimated real human installs are ${per((r) => r.organicWeekly)}. Compared week by week, bots removed.`;
+  }
+  return `${vs}: which is more popular? npm weekly downloads compared with estimated real human installs, week by week, bots removed.`;
 }

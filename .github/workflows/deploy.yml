@@ -3,7 +3,22 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+    # Docs and GitHub templates don't change the site.
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.editorconfig'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
+      - '.github/dependabot.yml'
+  # Pull requests (Dependabot included) run tests and the build; only main deploys.
+  pull_request:
   workflow_dispatch:
+    inputs:
+      refresh:
+        description: Refetch live data even if today's is cached
+        type: boolean
+        default: false
   schedule:
     - cron: '17 3 * * *' # daily refresh of public/data and public/badges
 
@@ -11,14 +26,15 @@ permissions:
   contents: read
 
 # Public URL of the site; the base path, canonical/OG links, sitemap, robots.txt, llms.txt and badges
-# all derive from it. For a custom domain set the repository variable SITE_URL (e.g. https://example.com/).
+# all derive from it. Defaults to site.config.ts; a repository variable SITE_URL overrides it.
 env:
   SITE_URL: ${{ vars.SITE_URL }}
 
 # One deployment at a time; let an in-flight production deploy finish.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  # Pull requests get their own group (a newer push cancels the older check); deploys queue in "pages".
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -31,15 +47,42 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: npm run data
+
+      # Live data (~150 packages, several minutes) is fetched at most once a day (UTC). Pushes reuse today's
+      # cached copy; the nightly schedule, a manual "refresh" run, or the first build of a day fetch it.
+      - id: day
+        run: echo "today=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - id: cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            public/data
+            public/badges
+          key: data-${{ steps.day.outputs.today }}-${{ github.run_id }}
+          restore-keys: |
+            data-${{ steps.day.outputs.today }}-
+      - id: fetch
+        if: >-
+          github.event_name != 'pull_request' &&
+          (github.event_name == 'schedule' || inputs.refresh || steps.cache.outputs.cache-matched-key == '')
+        run: npm run data
+      - if: steps.fetch.outcome == 'success'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            public/data
+            public/badges
+          key: data-${{ steps.day.outputs.today }}-${{ github.run_id }}
+
       - run: npm run build
-      - uses: actions/upload-pages-artifact@v5
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
         with:
           path: dist
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       pages: write
