@@ -1,0 +1,19 @@
+{
+ "name": "is-thirteen",
+ "description": "Check if a number is equal to 13",
+ "license": "WTFPL",
+ "homepage": "https://github.com/jezen/is-thirteen#readme",
+ "repository": {
+  "type": "git",
+  "url": "git+https://github.com/jezen/is-thirteen.git"
+ },
+ "dist-tags": {
+  "latest": "2.0.0"
+ },
+ "time": {
+  "modified": "2023-08-11T15:48:28.565Z",
+  "created": "2016-03-23T15:53:13.013Z",
+  "1.0.0": "2016-03-23T15:53:13.013Z",
+  "2.0.0": "2016-03-24T12:36:34.590Z"
+ }
+}

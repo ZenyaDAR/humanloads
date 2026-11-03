@@ -1,0 +1,26 @@
+name: Estimate looks wrong
+description: The human-install estimate for a package seems too high or too low.
+labels: [estimate]
+body:
+  - type: input
+    id: package
+    attributes:
+      label: Package
+      description: The npm package name, e.g. zod or @scope/name.
+    validations:
+      required: true
+  - type: input
+    id: shown
+    attributes:
+      label: What humanloads shows
+      description: The range and confidence on the package page.
+      placeholder: ≈ 1.2k–1.5k / week, medium confidence
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why you think it is off
+      description: Known usage, release pattern, private mirrors, anything that explains the gap.
+    validations:
+      required: true

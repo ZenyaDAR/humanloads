@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>humanloads: how many humans use an npm package?</title>
+    <meta name="description" content="npm counts every tarball fetch: mirrors, scanners, CI. humanloads estimates the real human installs behind an npm package, with a range and a confidence level." />
+    <meta name="theme-color" content="#FFFEF9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#161A2A" media="(prefers-color-scheme: dark)" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="humanloads" />
+    <link rel="canonical" href="%SITE_URL%" />
+    <meta property="og:url" content="%SITE_URL%" />
+    <meta property="og:title" content="humanloads: how many humans use an npm package?" />
+    <meta property="og:description" content="npm counts every tarball fetch: mirrors, scanners, CI. humanloads estimates the humans, with a range and an honest confidence level." />
+    <!-- og.png is exported from public/og.svg; social sites do not render SVG previews. -->
+    <meta property="og:image" content="%SITE_URL%og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="A pencil line of npm downloads towering over a blue ballpoint line of estimated human installs." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Fonts load without blocking first paint; display=swap shows the fallback font until they arrive. -->
+    <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=JetBrains+Mono:wght@400;500;600&display=swap" /></noscript>
+    <script>
+      // Apply the saved theme before first paint, so a dark-theme reader never sees a flash of paper.
+      try {
+        var t = localStorage.getItem('humanloads:theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <main id="app"></main>
+    <noscript><p style="padding: 16px">humanloads computes its estimates in your browser, so it needs JavaScript.</p></noscript>
+    <script type="module" src="/src/web/main.ts"></script>
+  </body>
+</html>

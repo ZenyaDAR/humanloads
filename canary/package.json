@@ -1,0 +1,14 @@
+{
+  "name": "humanloads-canary",
+  "version": "0.0.0",
+  "description": "Calibration package for humanloads. It does nothing; please don't install it.",
+  "license": "MIT",
+  "main": "index.js",
+  "files": ["index.js"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZenyaDAR/humanloads.git",
+    "directory": "canary"
+  },
+  "homepage": "https://humanloads.dev/"
+}

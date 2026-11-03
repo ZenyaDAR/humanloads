@@ -1,0 +1,37 @@
+name: Publish canary
+
+# Publishes a new patch of canary/ to npm once a week. Its downloads are pure bot/mirror noise,
+# which scripts/build-data.mjs turns into public/data/calibration.json.
+on:
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    # Opt-in: set the repository variable CANARY_ENABLED=true to publish.
+    if: vars.CANARY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm >= 11.5.1; Node 22 ships npm 10.
+      - run: npm install -g npm@latest
+      - name: Publish humanloads-canary
+        working-directory: canary
+        # NPM_TOKEN is optional and only needed for the first publish: npm trusted publishing can be configured
+        # only once the package exists. After that, set up trusted publishing for this workflow on npmjs.com and
+        # delete the secret; publishing then goes through OIDC (id-token: write).
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # ponytail: version from the UTC date, so nothing is committed back; a second run on the same day fails on npm.
+          npm version "0.0.$(date -u +%Y%m%d)" --no-git-tag-version
+          npm publish --provenance --access public

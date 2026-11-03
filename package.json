@@ -1,0 +1,26 @@
+{
+  "name": "humanloads",
+  "version": "0.0.0",
+  "private": true,
+  "description": "npm counts every tarball fetch. humanloads estimates the humans.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "data": "node scripts/build-data.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/prerender.mjs",
+    "preview": "vite preview",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "roughjs": "4.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}

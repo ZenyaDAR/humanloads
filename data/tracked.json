@@ -1,0 +1,11 @@
+[
+  "react",
+  "vue",
+  "zod",
+  "lodash",
+  "left-pad",
+  "express",
+  "vite",
+  "typescript",
+  "@nodesecure/scanner"
+]
