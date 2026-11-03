@@ -12,6 +12,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (Added
 - Popular comparisons (react vs vue, jest vs vitest, express vs fastify and more) as prerendered pages, linked
   from the homepage and from each package page.
 - GitHub link in the header.
+- Cookieless page-view counts with Cloudflare Web Analytics.
 
 ### Changed
 

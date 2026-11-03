@@ -8,7 +8,7 @@
 [![Deploy](https://github.com/ZenyaDAR/humanloads/actions/workflows/deploy.yml/badge.svg)](https://github.com/ZenyaDAR/humanloads/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![No backend](https://img.shields.io/badge/backend-none-brightgreen.svg)](#privacy)
-[![No tracking](https://img.shields.io/badge/tracking-none-brightgreen.svg)](#privacy)
+[![No cookies](https://img.shields.io/badge/cookies-none-brightgreen.svg)](#privacy)
 
 [![humanloads: npm counts every tarball fetch, we estimate the humans](public/og.png)](https://humanloads.dev)
 
@@ -76,8 +76,10 @@ The daily numbers are published as JSON, free to use:
 
 ## Privacy
 
-humanloads is a static site with no backend, no accounts, no cookies and no analytics. Your browser talks to
-public APIs (npm, ecosyste.ms, deps.dev, jsDelivr, GitHub) directly; fonts come from Google Fonts.
+humanloads is a static site with no backend, no accounts and no cookies. Your browser talks to public APIs
+(npm, ecosyste.ms, deps.dev, jsDelivr, GitHub) directly; fonts come from Google Fonts. Page views are counted with
+[Cloudflare Web Analytics](https://www.cloudflare.com/web-analytics/), which uses no cookies and does not
+fingerprint or track visitors across sites.
 
 ## Built with
 
