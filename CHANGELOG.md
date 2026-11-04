@@ -16,6 +16,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (Added
 - "Is X still maintained?" and "Is X still used?" on package pages: release history, maintainers, deprecation,
   download trend, version adoption and weekday rhythm.
 - New and changed pages are announced to search engines through IndexNow.
+- `favicon.ico` and an Apple touch icon next to the SVG favicon, for search results and older browsers.
 
 ### Changed
 
