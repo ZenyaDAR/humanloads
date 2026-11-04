@@ -13,8 +13,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (Added
   from the homepage and from each package page.
 - GitHub link in the header.
 - Cookieless page-view counts with Cloudflare Web Analytics.
+- "Is X still maintained?" and "Is X still used?" on package pages: release history, maintainers, deprecation,
+  download trend, version adoption and weekday rhythm.
+- New and changed pages are announced to search engines through IndexNow.
 
 ### Changed
+
+- Pages of packages under 1,000 estimated human installs a week stay available but are no longer indexed or listed
+  in the sitemap and `llms.txt`.
+- Shorter page titles and meta descriptions, within the limits search engines report on.
 
 - Search-friendly page titles and descriptions ("zod npm downloads vs real human installs", "How many people
   really use zod?"), with compact numbers.

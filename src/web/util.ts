@@ -117,7 +117,8 @@ export function setPageMeta(title: string, description: string, path: string | n
   setTag('meta[property="og:description"]', metaTag('property', 'og:description'), 'content', description);
   setTag('meta[property="og:url"]', metaTag('property', 'og:url'), 'content', url);
   setTag('link[rel="canonical"]', () => Object.assign(document.createElement('link'), { rel: 'canonical' }), 'href', url);
-  setTag('meta[name="robots"]', metaTag('name', 'robots'), 'content', url === null ? 'noindex' : null);
+  // Only ever added: a prerendered low-traffic page ships noindex, and crawlers that run JS must still see it.
+  if (url === null) setTag('meta[name="robots"]', metaTag('name', 'robots'), 'content', 'noindex');
 }
 
 // ---------- theme: system -> light -> dark ----------

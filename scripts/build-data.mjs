@@ -9,6 +9,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fetchPackageData } from '../src/core/sources.ts';
 import { estimate } from '../src/core/estimate.ts';
+import { packageFacts } from '../src/core/insights.ts';
 import { PackageNotFoundError } from '../src/core/types.ts';
 import { badgeFor, calibrate, poolFailure, safeName, selectFeatured } from './data-lib.ts';
 
@@ -150,6 +151,7 @@ const rows = await pool(candidates, async (name) => {
     high: e.lastWeek.high,
     inflation: e.lastWeek.npm > 0 ? Math.max(0, Math.min(1, 1 - e.lastWeek.organic / e.lastWeek.npm)) : 0,
     confidence: e.confidence,
+    facts: e.lastWeek.npm > 0 ? packageFacts(data, e) : undefined,
   };
 });
 

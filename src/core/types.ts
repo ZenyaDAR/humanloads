@@ -1,5 +1,6 @@
 // Shared contract between src/core (model + data fetching) and src/web (UI).
 // Only erasable TS syntax: this file must run under Node's type stripping.
+import type { PackageFacts } from './insights.ts';
 
 export interface DailyDownloads {
   day: string; // YYYY-MM-DD (UTC)
@@ -15,6 +16,8 @@ export interface RegistryDoc {
   repository?: { type?: string; url?: string } | string;
   'dist-tags': { latest?: string; [tag: string]: string | undefined };
   time: Record<string, unknown>; // version -> ISO date, plus "created" / "modified"; unpublished docs hold objects
+  maintainerCount?: number; // just the count: the registry's list also carries email addresses
+  deprecated?: string; // the latest version's deprecation message
 }
 
 export interface RawPackageData {
@@ -113,6 +116,7 @@ export interface FeaturedRow {
   high: number;
   inflation: number; // 1 - organicWeekly / npmWeekly, 0..1
   confidence: Confidence;
+  facts?: PackageFacts;
 }
 export interface FeaturedFile {
   generated: string; // ISO date

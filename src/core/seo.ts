@@ -10,27 +10,43 @@ export const REPO_LINK_HTML = `<a class="gh-link" href="${REPO_URL}" rel="noopen
 // Titles lead with the phrases people search for ("<pkg> npm downloads", "how many people use <pkg>").
 export const HOME_TITLE = 'Real npm download stats, minus the bots · humanloads';
 export const HOME_DESCRIPTION =
-  'How many people really use an npm package? npm counts every tarball fetch: mirrors, scanners, CI. humanloads estimates the real weekly human installs, with a range and a confidence level.';
+  'How many people really use an npm package? npm counts every mirror, scanner and CI fetch. humanloads estimates the real weekly human installs, with a range.';
+
+// Bing Webmaster Tools reports descriptions over 160 characters as an error. Package names can run to 214
+// characters, so templates alone can't guarantee this. A hard cut: a word-boundary cut would drop such a name
+// whole and leave a description that is too short, which Bing reports too.
+const MAX_DESCRIPTION = 160;
+const clip = (s: string) => (s.length <= MAX_DESCRIPTION ? s : `${s.slice(0, MAX_DESCRIPTION - 1)}…`);
 
 // "446,650,334" reads badly in a search snippet; big numbers go compact ("447M").
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 const fmt = (n: number) => (n >= 10_000 ? compact.format(n) : Math.round(n).toLocaleString('en-US'));
 const range = (low: number, high: number) => (fmt(low) === fmt(high) ? fmt(low) : `${fmt(low)}–${fmt(high)}`);
 
+// Long titles get cut off in results and flagged by Bing, so the site name is the first thing to go.
+const MAX_TITLE = 70;
+const titled = (t: string) => (t.length + SITE_NAME.length + 3 <= MAX_TITLE ? `${t} · ${SITE_NAME}` : t);
+
 export function packageTitle(name: string): string {
-  return `${name} npm downloads vs real human installs · ${SITE_NAME}`;
+  const full = `${name} npm downloads vs real human installs`;
+  return full.length <= MAX_TITLE ? titled(full) : `${name} npm downloads vs humans`;
 }
+
+// Below this many estimated human installs a week a page stays reachable but out of search indexes: there is
+// little to say about such a package and few people search for it. The same 1,000 gives "high" confidence in estimate.ts.
+const INDEXABLE_MIN_WEEKLY = 1000;
+export const isIndexable = (r?: Pick<FeaturedRow, 'organicWeekly'>): boolean => (r?.organicWeekly ?? 0) >= INDEXABLE_MIN_WEEKLY;
 
 // With build-time numbers (summary.json) the description quotes them; without, it stays generic.
 export function packageDescription(name: string, r?: Pick<FeaturedRow, 'organicWeekly' | 'low' | 'high' | 'confidence' | 'npmWeekly'>): string {
-  return r
-    ? `How many people really use ${name}? npm counts ${fmt(r.npmWeekly)} downloads a week; about ${range(r.low, r.high)} look like ` +
-        `real human installs (${r.confidence} confidence). The rest is mirrors, scanners and crawlers.`
-    : `How many people really use ${name}? humanloads separates real human installs from the mirrors, scanners and crawlers in its npm download count.`;
+  return clip(r
+    ? `How many people use ${name}? npm counts ${fmt(r.npmWeekly)} downloads a week; about ${range(r.low, r.high)} look like ` +
+        `real human installs (${r.confidence} confidence).`
+    : `How many people really use ${name}? humanloads separates real human installs from the mirrors, scanners and crawlers in its npm download count.`);
 }
 
 export function compareTitle(names: string[]): string {
-  return `${names.join(' vs ')}: npm downloads and real human installs · ${SITE_NAME}`;
+  return titled(`${names.join(' vs ')}: npm downloads and real human installs`);
 }
 
 export const comparePath = (names: string[]) => `compare/${names.join(',')}`;
@@ -54,8 +70,8 @@ export function compareDescription(names: string[], rows?: (CompareRow | undefin
   const vs = names.join(' vs ');
   if (rows?.length === names.length && rows.every(Boolean)) {
     const per = (pick: (r: CompareRow) => number) => (rows as CompareRow[]).map((r) => fmt(pick(r))).join(' vs ');
-    return `${vs}: which is more popular? npm counts ${per((r) => r.npmWeekly)} downloads a week; ` +
-      `estimated real human installs are ${per((r) => r.organicWeekly)}. Compared week by week, bots removed.`;
+    return clip(`${vs}: which is more popular? npm counts ${per((r) => r.npmWeekly)} downloads a week; ` +
+      `about ${per((r) => r.organicWeekly)} look like real human installs.`);
   }
-  return `${vs}: which is more popular? npm weekly downloads compared with estimated real human installs, week by week, bots removed.`;
+  return clip(`${vs}: which is more popular? npm weekly downloads compared with estimated real human installs, week by week, bots removed.`);
 }

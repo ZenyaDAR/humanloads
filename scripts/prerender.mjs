@@ -11,7 +11,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isValidPackageName } from '../src/core/sources.ts';
 import { customDomain, resolveSiteUrl } from '../site.config.ts';
 import { METHODOLOGY_PATH } from '../src/core/methodology.ts';
-import { comparePath } from '../src/core/seo.ts';
+import { comparePath, isIndexable } from '../src/core/seo.ts';
 import {
   compareHtml, homeHtml, llmsTxt, methodologyHtml, notFoundHtml, prerenderHtml, robotsTxt, sitemapXml,
 } from './data-lib.ts';
@@ -58,9 +58,13 @@ const names = [...new Set([...tracked, ...Object.keys(packages)])]
   })
   .sort((a, b) => (packages[b]?.organicWeekly ?? -1) - (packages[a]?.organicWeekly ?? -1));
 
-for (const [i, name] of names.entries()) {
-  // The next few names, wrapping around: every page links to others and gets links back.
-  const related = Array.from({ length: Math.min(RELATED, names.length - 1) }, (_, k) => names[(i + 1 + k) % names.length]);
+// Pages kept out of search indexes still get built, but stay out of the sitemap, llms.txt and "Other packages".
+const indexable = names.filter((name) => isIndexable(packages[name]));
+
+for (const name of names) {
+  // The next few indexable names, wrapping around: every page links to others and gets links back.
+  const i = indexable.indexOf(name);
+  const related = Array.from({ length: Math.min(RELATED, indexable.length - (i < 0 ? 0 : 1)) }, (_, k) => indexable[(i + 1 + k) % indexable.length]);
   const comparisons = pairs.filter((p) => p.includes(name));
   const html = prerenderHtml(shell, name, packages[name], SITE, { generated: summary?.generated, related, comparisons });
   const file = new URL(`${name}.html`, dist);
@@ -69,18 +73,18 @@ for (const [i, name] of names.entries()) {
 }
 
 await writeFile(new URL('sitemap.xml', dist), sitemapXml(
-    [SITE, SITE + METHODOLOGY_PATH, ...pairs.map((p) => SITE + comparePath(p)), ...names.map((n) => SITE + n)],
+    [SITE, SITE + METHODOLOGY_PATH, ...pairs.map((p) => SITE + comparePath(p)), ...indexable.map((n) => SITE + n)],
     summary?.generated,
   ));
 await writeFile(new URL('robots.txt', dist), robotsTxt(SITE));
 await writeFile(
   new URL('llms.txt', dist),
-  llmsTxt(SITE, names.map((name) => ({ name, row: packages[name] })), summary?.generated, pairs),
+  llmsTxt(SITE, indexable.map((name) => ({ name, row: packages[name] })), summary?.generated, pairs),
 );
 const domain = customDomain(SITE);
 if (domain) await writeFile(new URL('CNAME', dist), domain + '\n');
 
 console.log(
-  `prerender: ${SITE} home + methodology + ${pairs.length} comparisons + ${names.length} package pages${summary ? '' : ' (no summary.json, generic text)'}` +
+  `prerender: ${SITE} home + methodology + ${pairs.length} comparisons + ${names.length} package pages (${indexable.length} indexable)${summary ? '' : ' (no summary.json, generic text)'}` +
     `, sitemap, robots.txt, llms.txt${domain ? `, CNAME ${domain}` : ''}`,
 );

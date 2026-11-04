@@ -5,8 +5,9 @@ import { addDays, median } from '../src/core/estimate.ts';
 import { esc } from '../src/core/html.ts';
 import {
   HOME_DESCRIPTION, HOME_TITLE, REPO_LINK_HTML, REPO_URL, SITE_NAME, compareDescription, compareLinksHtml, comparePath,
-  compareTitle, packageDescription, packageTitle,
+  compareTitle, isIndexable, packageDescription, packageTitle,
 } from '../src/core/seo.ts';
+import { factsHtml } from '../src/core/insights.ts';
 import {
   METHODOLOGY_DESCRIPTION, METHODOLOGY_FAQ, METHODOLOGY_PATH, METHODOLOGY_SECTIONS, METHODOLOGY_TITLE, methodologyBody,
 } from '../src/core/methodology.ts';
@@ -109,11 +110,13 @@ interface Page {
   url: string;
   body: string; // goes inside <main id="app">
   jsonLd?: unknown;
+  noindex?: boolean;
 }
 
 // The SPA shell with this page's <title>, description, canonical, Open Graph, JSON-LD and static body.
 export function withPage(shell: string, page: Page): string {
   const tags = [
+    ...(page.noindex ? ['<meta name="robots" content="noindex" />'] : []),
     `<meta name="description" content="${esc(page.description)}" />`,
     `<link rel="canonical" href="${esc(page.url)}" />`,
     `<meta property="og:title" content="${esc(page.title)}" />`,
@@ -200,7 +203,8 @@ export function prerenderHtml(
           registry mirrors, security scanners, CI pipelines and crawlers as well as people.
           humanloads estimates that about ${fmt(r.organicWeekly)} of them (likely range ${range(r)}) were real human installs,
           with ${esc(r.confidence)} confidence. That puts ${botShare(r.inflation)} of npm's weekly count down to robots.</p>
-      </section>`
+      </section>
+      ${r.facts ? factsHtml(name, r.facts) : ''}`
     : `<section>
         <h2 class="section-title">What this page shows</h2>
         <p>npm's download count for ${esc(name)} includes every tarball fetch: registry mirrors, security scanners,
@@ -261,7 +265,7 @@ export function prerenderHtml(
       },
     ],
   };
-  return withPage(shell, { title, description, url, body, jsonLd: ld });
+  return withPage(shell, { title, description, url, body, jsonLd: ld, noindex: !isIndexable(r) });
 }
 
 const span = (r: FeaturedRow) => {
@@ -339,6 +343,8 @@ export function homeHtml(shell: string, site: string, featured: Featured | null,
           'security scanners and crawlers. Rebuilt daily from the public npm downloads API.',
         url: site,
         isAccessibleForFree: true,
+        license: 'https://github.com/ZenyaDAR/humanloads/blob/main/LICENSE',
+        creator: { '@type': 'Person', name: 'Yevhenii Dziza', url: 'https://github.com/ZenyaDAR' },
         keywords: ['npm', 'downloads', 'bot traffic', 'package popularity'],
         measurementTechnique: 'Publish-spike removal and per-version crawler floor subtraction',
         variableMeasured: ['npm weekly downloads', 'estimated weekly human installs', 'confidence'],

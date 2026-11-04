@@ -84,11 +84,13 @@ test('trimRegistry keeps only RegistryDoc fields', () => {
     repository: { type: 'git', url: 'u' },
     'dist-tags': { latest: '1.0.0' },
     time: { created: 'c' },
-    versions: { '1.0.0': {} },
+    versions: { '1.0.0': { deprecated: 'use y' } },
     readme: 'big',
-    maintainers: [],
+    maintainers: [{ name: 'a', email: 'a@example.test' }],
   };
   assert.deepEqual(trimRegistry(doc), {
+    maintainerCount: 1, // the count only: maintainer emails must not end up in caches or fixtures
+    deprecated: 'use y',
     name: 'x',
     description: 'd',
     license: 'MIT',

@@ -5,6 +5,8 @@ import {
   selectFeatured, sitemapXml, methodologyHtml, compareHtml,
 } from '../scripts/data-lib.ts';
 import { customDomain, resolveSiteUrl } from '../site.config.ts';
+import { METHODOLOGY_DESCRIPTION } from '../src/core/methodology.ts';
+import { HOME_DESCRIPTION, compareDescription, packageDescription } from '../src/core/seo.ts';
 import type { Confidence, FeaturedRow, RawPackageData } from '../src/core/types.ts';
 
 // --- Badges ---
@@ -207,7 +209,24 @@ test('home: canonical is the site root, featured cards link to package pages', (
   const html = homeHtml(SHELL, 'https://example.test/', { generated: '2026-11-03T00:00:00Z', humans: [row('zod', 100, 90)] });
   assert.match(html, /<link rel="canonical" href="https:\/\/example.test\/" \/>/);
   assert.match(html, /<a class="fcard" href="\/zod">/);
-  assert.equal(ldOf(html)[0]['@graph'][1]['@type'], 'Dataset');
+  const dataset = ldOf(html)[0]['@graph'][1];
+  assert.equal(dataset['@type'], 'Dataset');
+  assert.ok(dataset.license && dataset.creator.name); // optional in Search Console, but flagged when missing
+});
+
+test('meta descriptions stay within 160 characters, even with very long package names', () => {
+  const long = `@${'a'.repeat(100)}/${'b'.repeat(100)}`;
+  const row = { organicWeekly: 1_500_000, low: 1_400_000, high: 1_600_000, npmWeekly: 2_000_000, confidence: 'medium' as Confidence };
+  const all = [
+    HOME_DESCRIPTION, METHODOLOGY_DESCRIPTION,
+    packageDescription(long), packageDescription(long, row),
+    packageDescription('@typescript-eslint/typescript-estree', row),
+    compareDescription([long, 'b']), compareDescription([long, 'b'], [row, row]),
+    compareDescription(['express', 'fastify', 'koa'], [row, row, row]),
+  ];
+  for (const d of all) assert.ok(d.length >= 25 && d.length <= 160, `${d.length}: ${d}`);
+  // Names short enough to fit keep the whole sentence, not a clipped one.
+  assert.doesNotMatch(packageDescription('@typescript-eslint/typescript-estree', row), /…$/);
 });
 
 test('404 page: noindex, no canonical, no og:url', () => {
@@ -258,7 +277,7 @@ test('compareHtml: canonical, numbers side by side, answer by humans, JSON-LD ab
   });
   assert.match(html, /<link rel="canonical" href="https:\/\/example.test\/sub\/compare\/a,b" \/>/);
   assert.match(html, /<title>a vs b: npm downloads and real human installs/);
-  assert.match(html, /npm counts 5,000 vs 9,000 downloads a week; estimated real human installs are 4,000 vs 1,000/);
+  assert.match(html, /npm counts 5,000 vs 9,000 downloads a week; about 4,000 vs 1,000 look like real human installs/);
   assert.match(html, /<strong>a<\/strong> is ahead of b by about 4\.0×/);
   assert.match(html, /href="\/sub\/compare\/c,d"/);
   const ld = JSON.parse(html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)![1]);

@@ -447,6 +447,11 @@ h1, h2 { margin: 0; font-weight: 600; }
 .bar-legend dd { margin: 2px 0 0 26px; font-size: 0.85rem; color: var(--ink-soft); }
 .bar-legend dd strong { font: 600 0.95rem var(--mono); color: var(--ink); }
 
+/* ---------- "Is X still maintained / used?" ---------- */
+
+.insights { margin-top: 52px; }
+.insights p { margin: 6px 0 0; max-width: 70ch; overflow-wrap: anywhere; }
+
 /* ---------- versions table ---------- */
 
 .versions { margin-top: 52px; }

@@ -3,6 +3,7 @@ import { fetchEvidence, fetchPackageData } from '../core/sources.ts';
 import {
   PackageNotFoundError, type Calibration, type Estimate, type Evidence, type RawPackageData, type RegistryDoc,
 } from '../core/types.ts';
+import { factsHtml, packageFacts } from '../core/insights.ts';
 import { REPO_URL } from '../core/seo.ts';
 import { mountChart } from './chart.ts';
 import { searchBox } from './home.ts';
@@ -77,7 +78,7 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
       `
     <article class="pkg">
       ${header(data.registry, name)}
-      ${total === 0 ? zero(name) : body(est, name)}
+      ${total === 0 ? zero(name) : body(est, name, data)}
       <section class="evidence" aria-busy="true" aria-labelledby="ev-title">
         <h2 class="section-title" id="ev-title">Who actually uses it</h2>
         <p class="evidence-lede hand">checking dependents, CDN and GitHub…</p>
@@ -194,8 +195,9 @@ function zero(name: string): string {
     </section>`;
 }
 
-function body(est: Estimate, name: string): string {
+function body(est: Estimate, name: string, data: RawPackageData): string {
   const lastDay = est.daily[est.daily.length - 1]?.day;
+  const facts = packageFacts(data, est);
   return `
     ${cards(est)}
     ${lastDay ? `<p class="fineprint">Last 7 days of npm data, through ${esc(lastDay)}. npm publishes counts 1–2 days late.</p>` : ''}
@@ -214,6 +216,7 @@ function body(est: Estimate, name: string): string {
       <p class="fineprint">The vertical scale is square-root, so small numbers stay visible next to big spikes.</p>
     </figure>
 
+    ${facts ? factsHtml(name, facts) : ''}
     ${breakdown(est)}
     ${versions(est, name)}`;
 }

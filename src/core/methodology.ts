@@ -5,7 +5,7 @@
 export const METHODOLOGY_PATH = 'docs/methodology';
 export const METHODOLOGY_TITLE = 'Methodology: how humanloads estimates real npm installs';
 export const METHODOLOGY_DESCRIPTION =
-  'Why npm download counts overstate usage, and how humanloads removes mirror spikes and crawler floors to estimate weekly human installs as a range with a confidence level.';
+  'Why npm download counts overstate usage, and how humanloads removes mirror spikes and crawler floors to estimate weekly human installs as a range.';
 
 export const METHODOLOGY_SECTIONS = [
   ['what-npm-counts', 'What npm actually counts'],

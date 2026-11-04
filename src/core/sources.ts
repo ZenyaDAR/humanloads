@@ -45,7 +45,10 @@ export async function fetchPackageData(name: string, fetchImpl: typeof fetch = f
 // ponytail: we still download the full registry doc (several MB for react) because only it carries
 // `time`; the abbreviated install doc doesn't. Trimming here only keeps memory/fixtures small.
 export function trimRegistry(doc: any): RegistryDoc {
+  const deprecated = doc.versions?.[doc['dist-tags']?.latest]?.deprecated;
   return {
+    ...(Array.isArray(doc.maintainers) && { maintainerCount: doc.maintainers.length }),
+    ...(typeof deprecated === 'string' && deprecated && { deprecated }),
     name: doc.name,
     description: doc.description,
     license: typeof doc.license === 'string' ? doc.license : doc.license?.type,

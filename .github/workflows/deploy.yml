@@ -93,3 +93,16 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+      # Tell Bing and other IndexNow engines about the URLs. Not on the nightly refresh: resubmitting everything
+      # every day reads as spam. The key is public by design and proven by public/<key>.txt.
+      - if: github.event_name != 'schedule'
+        continue-on-error: true
+        env:
+          SITE: ${{ steps.deployment.outputs.page_url }}
+          KEY: 73dc13e3e79131cf2200e345c32794a0
+        run: |
+          host=$(echo "$SITE" | sed -E 's|https?://([^/]+).*|\1|')
+          curl -fsS "${SITE%/}/sitemap.xml" | grep -oP '(?<=<loc>)[^<]+' \
+            | jq -R . | jq -s --arg host "$host" --arg key "$KEY" '{host: $host, key: $key, urlList: .}' \
+            | curl -sS -w 'IndexNow: HTTP %{http_code}\n' -X POST https://api.indexnow.org/indexnow \
+                -H 'Content-Type: application/json; charset=utf-8' -d @-
