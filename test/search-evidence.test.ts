@@ -162,7 +162,7 @@ const sourceOf = (url: string): Source => {
 };
 const GOOD: Record<Source, unknown> = {
   eco: { dependent_packages_count: 12, dependent_repos_count: '34' },
-  deps: [{ name: 'big', downloads: 99 }, { nope: true }],
+  deps: [{ name: 'big', downloads: 99 }, { nope: true }, { name: '/evil.com', downloads: 1 }],
   cdn: { hits: { total: 5000 } },
   gh: { full_name: 'o/r', stargazers_count: 7, forks_count: 2, open_issues_count: 1, pushed_at: '2026-10-01T00:00:00Z' },
 };

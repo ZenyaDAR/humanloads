@@ -7,3 +7,11 @@ public/badges/
 .mcp.json
 .playguard/
 docs/PLAN.md
+.claude/
+.env
+.env.*
+.npmrc
+*.log
+*.pem
+*.key
+*.tgz

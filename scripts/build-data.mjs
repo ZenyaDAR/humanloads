@@ -7,7 +7,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fetchPackageData } from '../src/core/sources.ts';
+import { fetchPackageData, isValidPackageName } from '../src/core/sources.ts';
 import { estimate } from '../src/core/estimate.ts';
 import { packageFacts } from '../src/core/insights.ts';
 import { PackageNotFoundError } from '../src/core/types.ts';
@@ -87,7 +87,7 @@ try {
     await write('data/calibration.json', calibration);
     console.log(`calibration: floor ${calibration.floorPerVersion}/version`);
   } else {
-    console.log(`calibration: ${CANARY} has too little history yet, nothing written`);
+    console.log(`calibration: ${CANARY} has too little history or an implausible floor, nothing written`);
   }
 } catch (err) {
   console.log(
@@ -134,7 +134,8 @@ names.delete(CANARY);
 // `--limit N` (or DATA_LIMIT=N) caps the pool for quick local runs; CI uses the full MAX_PACKAGES.
 const limitArg = process.argv.indexOf('--limit');
 const limit = Number(limitArg > 0 ? process.argv[limitArg + 1] : process.env.DATA_LIMIT) || MAX_PACKAGES;
-const candidates = [...names].slice(0, Math.min(limit, MAX_PACKAGES));
+// Names come from third-party APIs and later reach URLs and file paths.
+const candidates = [...names].filter(isValidPackageName).slice(0, Math.min(limit, MAX_PACKAGES));
 console.log(`candidates: ${names.size} (${searched.length} searched, ${recent.length} recent releases), fetching ${candidates.length}`);
 
 const opts = calibration ? { calibration } : undefined;

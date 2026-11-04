@@ -159,7 +159,7 @@ export async function fetchEvidence(name: string, registry: RegistryDoc, fetchIm
     dependentRepos: count(pkg?.dependent_repos_count),
     topDependents: Array.isArray(deps)
       ? deps
-          .filter((d: any) => typeof d?.name === 'string')
+          .filter((d: any) => typeof d?.name === 'string' && isValidPackageName(d.name))
           .map((d: any) => ({ name: d.name, downloads: num(d.downloads) }))
       : [],
     cdnHitsMonth: count(cdn?.hits?.total),

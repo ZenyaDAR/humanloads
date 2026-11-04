@@ -124,6 +124,17 @@ test('poolFailure: exactly half failing, or tracked names outside a --limit pool
   assert.equal(poolFailure(['a', 'b'], new Set(['a', 'b']), ['z']), null);
 });
 
+test('calibrate: ignores an implausibly high floor, keeps the ceiling itself', () => {
+  const withFloor = (weekly: number): RawPackageData => ({
+    name: 'c',
+    downloads: [{ day: dayAt(70), downloads: weekly }],
+    registry: { name: 'c', 'dist-tags': {}, time: { '1.0.0': dayAt(0) + 'T00:00:00Z' } },
+    versionsLastWeek: { '1.0.0': weekly },
+  });
+  assert.equal(calibrate(withFloor(100), 'c')?.floorPerVersion, 100);
+  assert.equal(calibrate(withFloor(101), 'c'), null);
+});
+
 test('calibrate: returns null without data', () => {
   const empty: RawPackageData = { name: 'c', downloads: [], registry: { name: 'c', 'dist-tags': {}, time: {} }, versionsLastWeek: {} };
   assert.equal(calibrate(empty, 'c'), null);

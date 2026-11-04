@@ -128,6 +128,7 @@ GitHub stars do not feed into confidence: they indicate interest, not installs.
   Data collection is a separate script (a CI cron job); the result is published to `public/data/calibration.json`
   (`floorPerVersion`, `updated`, `source`; we do not measure the spike size yet, the model does not use it). The model only reads this file:
   `estimate(data, { calibration })` takes `floorPerVersion` instead of the constant 3 when the package's own floor is not measured (step B.4).
+  A reading above 100 per version is treated as implausible and ignored.
 - **Control group.** 20-30 packages with known real usage (our own, popular, dead).
   We use them to check that the model does not underestimate popular packages or overestimate dead ones.
 - **Weekdays/weekends.** Live developers have a weekly rhythm, bots do not.

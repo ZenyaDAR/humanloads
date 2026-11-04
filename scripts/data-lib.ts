@@ -18,6 +18,9 @@ const FEATURED_SIZE = 8;
 const INFLATED_MIN_NPM = 100;
 const INFLATED_MIN_RATIO = 0.3;
 const OLD_VERSION_DAYS = 14; // same cutoff as estimate.ts step B
+// ponytail: sanity ceiling, not a measurement (the default floor is 3). A higher canary reading means the name was
+// taken over or inflated, so ignore it. Tune it once real canary data exists.
+const MAX_PLAUSIBLE_FLOOR = 100;
 
 // Canary: every download is bot/mirror noise, so its numbers calibrate the model.
 export function calibrate(data: RawPackageData, source: string): Calibration | null {
@@ -36,8 +39,10 @@ export function calibrate(data: RawPackageData, source: string): Calibration | n
     .map((v) => data.versionsLastWeek[v] ?? 0);
   // ponytail: only the floor is measured; estimate() uses nothing else. Measure the spike size again once the model uses it.
   if (!old.length) return null;
+  const floorPerVersion = median(old);
+  if (floorPerVersion > MAX_PLAUSIBLE_FLOOR) return null;
   return {
-    floorPerVersion: median(old),
+    floorPerVersion,
     updated: new Date().toISOString(),
     source,
   };
