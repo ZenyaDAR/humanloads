@@ -324,6 +324,8 @@ h1, h2 { margin: 0; font-weight: 600; }
   list-style: none;
   font: 500 0.9rem var(--mono);
 }
+.deprecated { max-width: 62ch; margin: 14px 0 0; padding: 8px 14px; font-size: 0.95rem; color: var(--ink-soft); background: var(--card-soft); border-left: 3px solid var(--amber); overflow-wrap: anywhere; }
+.deprecated strong { color: var(--ink); }
 .pkg-links li:not(:last-child)::after { content: '·'; margin: 0 10px; color: var(--pencil); }
 
 /* ---------- the two cards ---------- */
@@ -333,7 +335,8 @@ h1, h2 { margin: 0; font-weight: 600; }
   grid-template-columns: minmax(0, 1fr);
   gap: 18px;
 }
-@media (min-width: 640px) { .cards { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 26px; } }
+@media (min-width: 640px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px; } }
+.cards > .noise, .cards > .why { grid-column: 1 / -1; }
 
 .card {
   position: relative;
@@ -345,16 +348,17 @@ h1, h2 { margin: 0; font-weight: 600; }
 }
 .card-npm { transform: rotate(-0.6deg); border-color: var(--pencil); border-style: dashed; background: var(--card-soft); box-shadow: none; }
 .card-human { transform: rotate(0.35deg); border-color: var(--marker); border-radius: var(--sketch-2); box-shadow: var(--lift-hover); }
-.card-label { font: 700 1.6rem/1 var(--hand); margin-bottom: 6px; }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; min-height: 30px; }
+.card-label { font: 700 1.6rem/1 var(--hand); }
 .card-npm .card-label { color: var(--ink-soft); }
 .card-human .card-label { color: var(--marker-ink); }
 .card-big {
-  margin: 4px 0 6px;
-  font: 600 clamp(2rem, 8vw, 2.7rem)/1.15 var(--mono);
+  margin: 8px 0 0;
+  font: 600 clamp(1.8rem, 5.2vw, 2.5rem)/1.15 var(--mono);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.per { font: 400 1rem var(--sans); color: var(--ink-soft); white-space: nowrap; }
+.per { margin: 0 0 10px; font: 400 0.95rem var(--sans); color: var(--ink-soft); }
 .card-npm .card-big { color: var(--ink-soft); }
 .struck { position: relative; text-decoration: none; }
 .struck::after {
@@ -371,7 +375,7 @@ h1, h2 { margin: 0; font-weight: 600; }
 }
 .card-sub { margin: 0; font-size: 0.875rem; color: var(--ink-soft); }
 .card-human mark { background-size: 100% 46%; background-position: 0 78%; }
-.card-point { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; color: var(--ink-soft); }
+.card-point { margin: 0 0 6px; color: var(--ink-soft); }
 .card-point strong { font: 700 1.25rem var(--mono); color: var(--marker-ink); }
 
 .pill {
@@ -388,7 +392,26 @@ h1, h2 { margin: 0; font-weight: 600; }
 .pill-medium { color: var(--amber); }
 .pill-low { color: var(--berry); }
 
-.notes { margin: 12px 0 0; padding: 10px 0 0; list-style: none; border-top: 1px dashed var(--rule); font-size: 0.875rem; color: var(--ink-soft); }
+.noise { padding: 2px 4px 0; }
+.noise-text { margin: 0 0 8px; color: var(--ink-soft); }
+.noise-text strong { color: var(--ink); }
+.noise-key { display: inline-flex; align-items: center; gap: 4px 6px; margin-left: 12px; font-size: 0.8rem; white-space: nowrap; }
+.noise-key .key { flex: none; width: 18px; height: 12px; border: 1px solid var(--ink-soft); border-radius: 3px; }
+.noise-key .noise-kept { margin-left: 6px; }
+.noise-bar { display: flex; height: 22px; gap: 3px; padding: 3px; border: 2px solid var(--ink); border-radius: var(--sketch-2); background: var(--card); }
+.noise-kept { min-width: 6px; flex-basis: 0; border-radius: 3px; background: var(--marker); }
+.noise-cut { min-width: 6px; flex-basis: 0; border-radius: 3px; background: repeating-linear-gradient(45deg, var(--pencil) 0 2px, transparent 2px 7px); }
+.noise-bar-mini { height: 14px; padding: 2px; gap: 2px; border-width: 1.5px; margin-top: 2px; }
+.sk-fcard > .noise-bar-mini { border-style: dashed; border-color: var(--pencil); background: none; }
+.noise-bar-unknown { border-style: dashed; border-color: var(--pencil); }
+
+.why { margin-top: -10px; }
+.why summary { display: list-item; list-style-position: inside; width: fit-content; min-height: 44px; cursor: pointer; font: 700 1.2rem/1.3 var(--hand); color: var(--note-ink); padding: 10px 6px 10px 2px; }
+.why summary:hover { text-decoration: underline; text-underline-offset: 3px; }
+.why[open] summary { margin-bottom: 4px; }
+.why .card-sub { margin: 0; max-width: 70ch; }
+.notes { margin: 0; padding: 0; list-style: none; font-size: 0.9rem; color: var(--ink-soft); columns: 2 320px; column-gap: 32px; }
+.notes li { break-inside: avoid; }
 .notes li { position: relative; padding-left: 18px; margin: 3px 0; }
 .notes li::before { content: '✎'; position: absolute; left: 0; color: var(--note-ink); }
 
@@ -399,6 +422,8 @@ h1, h2 { margin: 0; font-weight: 600; }
 .rb-end { fill: none; stroke: var(--ink-soft); stroke-width: 1; stroke-dasharray: 2 1.5; }
 .rb-base { fill: none; stroke: var(--ink); stroke-width: 1.2; stroke-linecap: round; }
 
+.adoption { margin: 14px 0 0; color: var(--ink-soft); }
+.adoption strong { color: var(--ink); }
 .fineprint { margin: 14px 0 0; font-size: 0.8rem; color: var(--ink-soft); }
 
 /* ---------- chart ---------- */
@@ -451,6 +476,14 @@ h1, h2 { margin: 0; font-weight: 600; }
 
 .insights { margin-top: 52px; }
 .insights p { margin: 6px 0 0; max-width: 70ch; overflow-wrap: anywhere; }
+.chain { margin: 12px 0; padding-left: 1.6em; }
+.chain li + li { margin-top: 4px; }
+.chain-ver { font: 0.85rem var(--mono); color: var(--ink-soft); }
+.chain-n { font: 600 0.9rem var(--mono); }
+.chain-n::before { content: "· "; color: var(--ink-soft); font-weight: 400; }
+.dep-msg { min-width: 24ch; overflow-wrap: anywhere; }
+.dep-table th, .dep-table td { vertical-align: top; }
+.dep-table td:nth-of-type(2) { white-space: nowrap; }
 
 /* ---------- versions table ---------- */
 
@@ -580,6 +613,7 @@ table[style*='--floor'] td.bar-col .vbar::after {
 }
 .fcard-desc {
   margin-top: 8px;
+  min-height: 3.2em; /* two lines, so the numbers sit at the same height in every card of a row */
   font-size: 0.85rem;
   color: var(--ink-soft);
   display: -webkit-box;
@@ -587,8 +621,8 @@ table[style*='--floor'] td.bar-col .vbar::after {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.fcard-nums { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font: 600 1.05rem var(--mono); }
-.fcard-nums .struck { color: var(--ink-soft); }
+.fcard-nums { display: flex; flex-direction: column; gap: 2px; min-height: calc(2lh + 2px); font: 600 1.05rem var(--mono); }
+.fcard-nums .struck { align-self: flex-start; color: var(--ink-soft); }
 .fcard-human mark { background-size: 100% 50%; background-position: 0 80%; }
 .fcard .pill { justify-self: start; }
 /* Skeleton card: same boxes as a real card, text replaced by pencil bars. */
@@ -597,13 +631,6 @@ table[style*='--floor'] td.bar-col .vbar::after {
 .sk-fcard > .fcard-desc { background-size: 90% 0.6em; background-position: 0 25%; }
 .sk-fcard > .fcard-nums { background-size: 70% 0.6em; }
 .sk-fcard > .pill { width: 64px; border-color: var(--pencil); background: none; }
-/* In 2+ columns (each card < 2 × 250px wide) the "npm ≈ humans" line of a big package wraps to two lines,
-   so the skeleton reserves two as well; otherwise every card grows on swap. */
-.fcards { container-type: inline-size; }
-@container (min-width: 520px) {
-  .sk-fcard > .fcard-nums { min-height: calc(2lh + 4px); background-position: 0 30%; }
-}
-
 /* ---------- package page: evidence, tools ---------- */
 
 .evidence { margin-top: 52px; }
@@ -671,8 +698,16 @@ table[style*='--floor'] td.bar-col .vbar::after {
   .cmp-table th, .cmp-table td { padding: 0; border: 0; text-align: left; }
   .cmp-table tbody th { grid-column: 1 / -1; font-size: 1.05rem; overflow-wrap: anywhere; }
   .cmp-table td::before { content: attr(data-label); display: block; font: 700 1.05rem/1.2 var(--hand); color: var(--ink-soft); }
+  .dep-table td.dep-msg { grid-column: 1 / -1; padding-left: 0; min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .fcards li .fcard, .fcards li .fcard:hover, .fcards li .fcard:focus-visible { transform: none; }
 }
+
+/* Confidence not decided yet: evidence is still loading. */
+.pill-checking { border-style: dashed; color: var(--ink-soft); font-weight: 400; }
+
+/* Common questions at the end of the home page. */
+.home-faq { margin-top: 48px; }
+.home-faq .cmp-links { margin-top: 24px; }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { estimate } from '../src/core/estimate.ts';
+import { awaitingEvidence, estimate } from '../src/core/estimate.ts';
 import type { Calibration, Confidence, DailyDownloads, Estimate, Evidence, RawPackageData } from '../src/core/types.ts';
 
 const FIXTURES = ['nervegraph', 'react', 'lodash', 'zod', 'left-pad', 'request', 'is-thirteen', 'nodesecure__scanner'];
@@ -91,10 +91,12 @@ test('fixture nervegraph: the weekly range has width (count noise)', () => {
 });
 
 for (const dir of ['react', 'lodash', 'zod']) {
-  test(`fixture ${dir}: organic is at least 90% of npm with high confidence`, () => {
-    const e = estimate(loadFixture(dir));
+  test(`fixture ${dir}: organic is at least 90% of npm; high confidence needs evidence`, () => {
+    const data = loadFixture(dir);
+    const e = estimate(data);
     assert.ok(e.lastWeek.organic >= 0.9 * e.lastWeek.npm, `organic=${e.lastWeek.organic} npm=${e.lastWeek.npm}`);
-    assert.equal(e.confidence, 'high');
+    assert.equal(e.confidence, 'medium');
+    assert.equal(estimate(data, { evidence: evidence({ dependentPackages: 5 }) }).confidence, 'high');
   });
 }
 
@@ -128,6 +130,151 @@ test('spike removal: steady growth with regular publishes is not clipped', () =>
   const e = estimate(raw(s, time));
   const growth = s.at(-1)!.downloads - s[0].downloads;
   assert.ok(e.breakdown.mirrorsTotal <= 0.01 * growth, `mirrorsTotal=${e.breakdown.mirrorsTotal} growth=${growth}`);
+});
+
+// Popular package with a 2.5x weekday/weekend swing and two runs of npm outages, as in October 2026. Most weekdays nearby
+// are gone, so a fallback that ignores the weekday lands on weekend levels. Fails on the old fallback: it cut 6,000.
+const WEEKDAY = 2500;
+const outageBefore = (publishAt: number, days: number) => {
+  const s = Array.from({ length: days }, (_, i) => ({ day: dayAt(i), downloads: i % 7 >= 5 ? 1000 : WEEKDAY }));
+  for (let i = publishAt - 14; i <= publishAt - 4; i++) if (i !== publishAt - 10 && i !== publishAt - 9) s[i].downloads = 0;
+  return s;
+};
+
+test('spike removal: outages around a publish do not clip an ordinary weekday', () => {
+  // Regression: axios lost 21% when the neighbouring-day fallback mixed in weekend levels. Series ends before +7 exists.
+  const publishAt = 56 + 1; // a Tuesday
+  const e = estimate(raw(outageBefore(publishAt, publishAt + 6), { '1.0.0': isoAt(publishAt) }));
+  assert.equal(e.breakdown.mirrorsTotal, 0);
+});
+
+test('spike removal: a level that rose recently is not clipped against older weeks', () => {
+  const publishAt = 57;
+  const s = Array.from({ length: publishAt + 6 }, (_, i) => ({ day: dayAt(i), downloads: i < publishAt - 16 ? 100 : 300 }));
+  s[publishAt - 7].downloads = 0;
+  s[publishAt - 14].downloads = 0;
+  assert.equal(estimate(raw(s, { '1.0.0': isoAt(publishAt) })).breakdown.mirrorsTotal, 0);
+});
+
+test('spike removal: a real spike is still cut when the nearby weekdays are outages', () => {
+  const publishAt = 57;
+  const s = outageBefore(publishAt, publishAt + 6);
+  s[publishAt].downloads = 20 * WEEKDAY;
+  const e = estimate(raw(s, { '1.0.0': isoAt(publishAt) }));
+  assert.equal(e.breakdown.mirrorsTotal, 19 * WEEKDAY);
+});
+
+test('range: the upper bound keeps a spike cut in the last week, which may hold real users', () => {
+  const s = series(60, () => 100, 1);
+  s[57].downloads = 5000;
+  const time: Record<string, string> = { '2.0.0': isoAt(57) };
+  const v: Record<string, number> = { '2.0.0': 5500 };
+  for (let i = 0; i < 5; i++) [time[`0.${i}.0`], v[`0.${i}.0`]] = [isoAt(i), 3];
+  const e = estimate(raw(s, time, v));
+  assert.equal(e.breakdown.mirrorsTotal, 4900);
+  assert.ok(e.lastWeek.organic <= 700, JSON.stringify(e.lastWeek));
+  assert.ok(e.lastWeek.high >= 5500, JSON.stringify(e.lastWeek));
+  assertInvariants(e, s.length, 'kept spike');
+});
+
+// --- New packages ---
+
+const newPackage = () =>
+  raw(
+    [...Array.from({ length: 58 }, (_, i) => ({ day: dayAt(i), downloads: 0 })), { day: dayAt(58), downloads: 607 }],
+    { '1.0.0': isoAt(58) },
+    { '1.0.0': 607 },
+  );
+
+test('too new: no fake zero, the range reaches the whole count', () => {
+  const e = estimate(newPackage());
+  assert.equal(e.tooNew, true);
+  assert.equal(e.confidence, 'low');
+  assert.equal(e.lastWeek.low, 0);
+  assert.equal(e.lastWeek.high, 607);
+  assert.ok(e.notes.some((n) => n.includes('too little history')), JSON.stringify(e.notes));
+});
+
+test('too new: days before the first publish are not called npm outages', () => {
+  assert.ok(!estimate(newPackage()).notes.some((n) => n.includes('outage')));
+});
+
+test('too new: zeros after the first spike are not called npm outages', () => {
+  const s = Array.from({ length: 60 }, (_, i) => ({ day: dayAt(i), downloads: i >= 50 && i < 54 ? 150 : 0 }));
+  assert.ok(!estimate(raw(s, { '1.0.0': isoAt(50) })).notes.some((n) => n.includes('outage')));
+});
+
+test('too new: the top of the range is the whole count even when per-version counts lag or are missing', () => {
+  const s = Array.from({ length: 60 }, (_, i) => ({ day: dayAt(i), downloads: i >= 57 ? 60 : 0 }));
+  for (const versions of [{}, { '1.0.0': 100 }] as Record<string, number>[]) {
+    const lw = estimate(raw(s, { '1.0.0': isoAt(57) }, versions)).lastWeek;
+    assert.equal(lw.high, 180, JSON.stringify(lw));
+    assert.equal(lw.low, 0, JSON.stringify(lw));
+  }
+});
+
+test('too new: no weekday rhythm from a few real days', () => {
+  const s = Array.from({ length: 60 }, (_, i) => ({ day: dayAt(i), downloads: i >= 52 && i % 7 < 5 ? 500 : 0 }));
+  const time = { '1.0.0': isoAt(52) };
+  assert.ok(!estimate(raw(s, time, { '1.0.0': 2000 })).notes.some((n) => n.includes('Weekday')));
+});
+
+test('too new: evidence cannot raise confidence', () => {
+  assert.equal(estimate(newPackage(), { evidence: RICH_EVIDENCE }).confidence, 'low');
+});
+
+test('too new: ends two weeks after the first publish', () => {
+  const s = Array.from({ length: 30 }, (_, i) => ({ day: dayAt(i), downloads: 5 }));
+  const lastDay = 29;
+  assert.equal(estimate(raw(s, { '1.0.0': isoAt(lastDay - 13) })).tooNew, true);
+  assert.equal(estimate(raw(s, { '1.0.0': isoAt(lastDay - 14) })).tooNew, false);
+});
+
+test('range: a count of zero still has an upper bound (exact 95% Poisson is 3.69)', () => {
+  const s = series(60, () => 30, 1);
+  const time: Record<string, string> = {};
+  const v: Record<string, number> = {};
+  for (let i = 0; i < 5; i++) [time[`0.${i}.0`], v[`0.${i}.0`]] = [isoAt(i), 42];
+  const lw = estimate(raw(s, time, v)).lastWeek;
+  assert.equal(lw.organic, 0);
+  assert.equal(lw.high, 4);
+});
+
+// --- Inflation by direct tarball requests ---
+
+test('pumped package: a flat stream on one version never reaches high without independent evidence', () => {
+  const time: Record<string, string> = {};
+  const v: Record<string, number> = {};
+  for (let i = 0; i < 3; i++) [time[`1.0.${i}`], v[`1.0.${i}`]] = [isoAt(i), i === 2 ? 1094 : 3];
+  const s = series(120, () => 200, 0.25); // a plausible weekday rhythm is easy to fake too
+  const e = estimate(raw(s, time, v));
+  assert.ok(e.lastWeek.organic >= 1000, JSON.stringify(e.lastWeek));
+  assert.equal(e.confidence, 'medium');
+  const checked = estimate(raw(s, time, v), { evidence: evidence({ dependentPackages: 0, dependentRepos: 0, cdnHitsMonth: 0 }) });
+  assert.equal(checked.confidence, 'medium');
+  assert.ok(checked.notes.some((n) => n.includes('No independent evidence')), JSON.stringify(checked.notes));
+  for (const failed of [evidence(), evidence({ dependentRepos: 0, cdnHitsMonth: 0 })]) {
+    assert.ok(
+      estimate(raw(s, time, v), { evidence: failed }).notes.some((n) => n.includes('unavailable')),
+      'a failed source must not read as "no evidence"',
+    );
+  }
+});
+
+test('awaitingEvidence: true only where evidence could lift medium to high', () => {
+  assert.equal(awaitingEvidence(estimate(loadFixture('react'))), true);
+  assert.equal(awaitingEvidence(estimate(loadFixture('react'), { evidence: RICH_EVIDENCE })), false);
+  assert.equal(awaitingEvidence(estimate(loadFixture('nervegraph'))), false);
+});
+
+test('rhythm note: not shown when the filtered count is noise', () => {
+  const time: Record<string, string> = {};
+  const v: Record<string, number> = {};
+  for (let i = 0; i < 5; i++) [time[`0.${i}.0`], v[`0.${i}.0`]] = [isoAt(i), 20];
+  const e = estimate(raw(series(70, () => 20, 0.2), time, v));
+  assert.ok(e.lastWeek.organic < 10, JSON.stringify(e.lastWeek));
+  assert.ok((e.signals?.weekdayRatio ?? 0) > 2);
+  assert.ok(!e.notes.some((n) => n.includes('Weekday')), JSON.stringify(e.notes));
 });
 
 // --- Step B: crawler floor ---
@@ -209,6 +356,7 @@ const evidence = (e: Partial<Evidence> = {}): Evidence => ({
   codeSearchUrl: '',
   ...e,
 });
+const RICH_EVIDENCE = evidence({ dependentPackages: 1000, dependentRepos: 1000, cdnHitsMonth: 1e6 });
 const CALIBRATION: Calibration = { floorPerVersion: 50, updated: '2026-10-01T00:00:00Z', source: 'canary' };
 const RICH = evidence({ dependentPackages: 1000, dependentRepos: 1000, cdnHitsMonth: 1e6 });
 
@@ -292,6 +440,7 @@ const raiseCases: [string, Evidence | undefined, number, Confidence][] = [
   ['1000 CDN hits raises to medium', evidence({ cdnHitsMonth: 1000 }), 1, 'medium'],
   ['999 CDN hits stays low', evidence({ cdnHitsMonth: 999 }), 1, 'low'],
   ['weekday rhythm alone raises to medium', undefined, 0.5, 'medium'],
+  ['evidence on an unmeasured floor stays below high', RICH, 1, 'medium'],
   ['rich evidence plus rhythm never reaches high', RICH, 0.5, 'medium'],
 ];
 for (const [label, ev, weekend, expected] of raiseCases) {
@@ -315,11 +464,12 @@ test('confidence raise: medium with a measured floor never becomes high', () => 
 });
 
 for (const [label, data] of [
-  ['react (high)', () => loadFixture('react')],
+  ['react', () => loadFixture('react')],
   ['measured medium', measuredMedium],
 ] as const) {
   test(`confidence is never lowered by missing or weak evidence: ${label}`, () => {
     const base = estimate(data()).confidence;
+    assert.equal(base, 'medium');
     for (const ev of [evidence(), evidence({ dependentPackages: 0, dependentRepos: 0, cdnHitsMonth: 0 })]) {
       assert.equal(estimate(data(), { evidence: ev }).confidence, base);
     }

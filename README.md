@@ -2,7 +2,7 @@
 
 # humanloads
 
-**How many humans actually use an npm package?**
+**npm download stats, and how many are real installs.**
 
 [![Website](https://img.shields.io/website?url=https%3A%2F%2Fhumanloads.dev&label=humanloads.dev&up_message=online)](https://humanloads.dev)
 [![Deploy](https://github.com/ZenyaDAR/humanloads/actions/workflows/deploy.yml/badge.svg)](https://github.com/ZenyaDAR/humanloads/actions/workflows/deploy.yml)
@@ -10,7 +10,7 @@
 [![No backend](https://img.shields.io/badge/backend-none-brightgreen.svg)](#privacy)
 [![No cookies](https://img.shields.io/badge/cookies-none-brightgreen.svg)](#privacy)
 
-[![humanloads: npm counts every tarball fetch, we estimate the humans](public/og.png)](https://humanloads.dev)
+[![humanloads: npm counts every tarball fetch, we estimate the real installs](public/og.png)](https://humanloads.dev)
 
 </div>
 
@@ -20,21 +20,26 @@ npm's download counter counts every tarball fetch, not every person. Registry mi
 CI pipelines and crawlers all add to it. A brand-new version gets 100–150 "downloads" within days even if
 nobody uses it, and crawlers fetch every old version a few times a week, forever.
 
-For a big package that noise is a rounding error. For a small one it can be 90% of the number. So "1,200
-weekly downloads" might mean a thriving project, or two users and a lot of robots.
+For a small package that noise can be 90% of the number, so "1,200 weekly downloads" might mean a thriving
+project, or two users and a lot of robots. For a big package it is a rounding error, and the count is mostly CI,
+builds and dependency installs that no public data can separate from people.
 
 ## What humanloads does
 
 Type a package name at **[humanloads.dev](https://humanloads.dev)** and get:
 
-- **An estimate of real human installs per week**, next to npm's raw count, as a range with an honest
-  confidence level (high, medium or low).
-- **Where the downloads went**: how much went to mirrors and scanners, how much to crawlers, how much to people.
-- **A per-version breakdown**: the flat "crawler floor" every version gets, and what sits above it.
+- **Real installs per week**, next to npm's raw count: what remains after removing publish spikes and the
+  crawler floor, as a range with a confidence level (high, medium or low).
+- **Where the downloads went**: how much went to mirrors and scanners, how much to crawlers, how much is left.
+- **Which versions are in use**: the share on the latest major version, and a per-version breakdown with the flat
+  "crawler floor" every version gets.
 - **Independent evidence of use** that is much harder to fake: dependent packages and repositories,
   jsDelivr CDN hits, GitHub activity.
 - **Side-by-side comparison** of 2–3 packages: [react vs vue](https://humanloads.dev/compare/react,vue).
-- **Daily lists** of the packages with the most real humans and the most bot-inflated counts.
+- **A daily list** of settled packages with the most noise in their count.
+
+**This is not a count of people.** Real installs still include CI runs, Docker builds and installs as a
+dependency of other packages. Nobody can tell those apart from people using public data, npm included.
 
 ## How the estimate works
 
@@ -42,24 +47,22 @@ Type a package name at **[humanloads.dev](https://humanloads.dev)** and get:
    compared with the same weekday in the weeks around it and cut back to that level.
 2. **Subtract the crawler floor.** Robots download *every* published version at about the same weekly rate.
    That floor is measured on old versions and subtracted from all of them.
-3. **Report a range, not a number.** What is left becomes a weekly range, widened by counting noise, with a
-   confidence level. Weekday rhythm and independent evidence can raise confidence; missing data never lowers it.
+3. **Report a range, not a number.** What is left becomes a weekly range, widened by counting noise, and its top
+   keeps any spike that was cut, since real users can arrive on release day. High confidence needs independent
+   evidence of use, because direct tarball requests pass both filters.
 
-A canary package that nobody uses is published regularly to measure the bot noise directly.
-The full method, thresholds and known limits are on the
-**[methodology page](https://humanloads.dev/docs/methodology)**.
-
-> Nobody knows the exact number of users of an npm package, npm included. humanloads gives an estimate
-> and shows its working.
+A canary package that nobody uses is published regularly to measure the bot noise directly. The numbers have
+not been checked against packages with a known audience yet. The full method, thresholds and known limits are on
+the **[methodology page](https://humanloads.dev/docs/methodology)**.
 
 ## Badge for your README
 
-Show real human installs next to your download count:
+Show real installs next to your download count:
 
-[![humans/week](https://img.shields.io/endpoint?url=https://humanloads.dev/badges/zod.json)](https://humanloads.dev/zod)
+[![real installs/week](https://img.shields.io/endpoint?url=https://humanloads.dev/badges/zod.json)](https://humanloads.dev/zod)
 
 ```md
-[![humans/week](https://img.shields.io/endpoint?url=https://humanloads.dev/badges/<name>.json)](https://humanloads.dev/<name>)
+[![real installs/week](https://img.shields.io/endpoint?url=https://humanloads.dev/badges/<name>.json)](https://humanloads.dev/<name>)
 ```
 
 For a scoped package, `@scope/name` becomes `scope__name` in the badge URL. Badges are rebuilt daily for
@@ -69,15 +72,16 @@ packages listed in [`data/tracked.json`](data/tracked.json): add yours with a on
 
 The daily numbers are published as JSON, free to use:
 
-- [`/data/summary.json`](https://humanloads.dev/data/summary.json): every package estimated in the last run
-  (npm weekly count, estimated humans, range, bot share, confidence).
-- [`/data/featured.json`](https://humanloads.dev/data/featured.json): the homepage lists.
+- [`/data/summary.json`](https://humanloads.dev/data/summary.json): the catalog, part of which is refreshed each
+  night (npm weekly count, real installs, range, noise share, confidence, date of that row).
+- [`/data/featured.json`](https://humanloads.dev/data/featured.json): the homepage list.
+- [`/data/insights.json`](https://humanloads.dev/data/insights.json): the most downloaded deprecated packages, dependency trails and median growth across the catalog.
 - [`/llms.txt`](https://humanloads.dev/llms.txt): a summary of the site for AI assistants.
 
 ## Privacy
 
 humanloads is a static site with no backend, no accounts and no cookies. Your browser talks to public APIs
-(npm, ecosyste.ms, deps.dev, jsDelivr, GitHub) directly; fonts come from Google Fonts. Page views are counted with
+(npm, npms.io for search suggestions, ecosyste.ms, jsDelivr, GitHub) directly; fonts come from Google Fonts. Page views are counted with
 [Cloudflare Web Analytics](https://www.cloudflare.com/web-analytics/), which uses no cookies and does not
 fingerprint or track visitors across sites.
 

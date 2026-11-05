@@ -1,4 +1,5 @@
-import type { DailyDownloads, Evidence, RawPackageData, RegistryDoc, SearchHit } from './types.ts';
+import type { DailyDownloads, DependencyPull, Evidence, RawPackageData, RegistryDoc, SearchHit } from './types.ts';
+import { clip } from './html.ts';
 import { PackageNotFoundError } from './types.ts';
 
 // npm's rules: url-safe, optional @scope/, at most 214 chars. Uppercase is allowed because legacy
@@ -39,16 +40,85 @@ export async function fetchPackageData(name: string, fetchImpl: typeof fetch = f
     downloads: ((dl.body?.downloads ?? []) as DailyDownloads[]).map((d) => ({ day: d.day, downloads: d.downloads })),
     registry: trimRegistry(reg.body),
     versionsLastWeek: ver.body?.downloads ?? {},
+    pulls: dependencyPulls(reg.body, ver.body?.downloads ?? {}),
   };
+}
+
+const PULL_MIN_WEEKLY = 10_000; // below this a dependency can't explain anything worth a line on a page
+
+// For each required dependency: how many of last week's downloads came on versions that ask for it. Optional, peer and
+// bundled dependencies are left out, since installing the package doesn't have to fetch them.
+export function dependencyPulls(doc: any, weekly: Record<string, unknown>): Record<string, DependencyPull> {
+  const byChild = new Map<string, Map<string, number>>();
+  for (const [version, n] of Object.entries(weekly)) {
+    const manifest = doc.versions?.[version];
+    if (typeof n !== 'number' || !manifest?.dependencies) continue;
+    const bundled = manifest.bundleDependencies ?? manifest.bundledDependencies; // a list, or true for all of them
+    if (bundled === true) continue;
+    for (const [child, range] of Object.entries(manifest.dependencies)) {
+      if (typeof range !== 'string' || Object.hasOwn(manifest.optionalDependencies ?? {}, child)) continue;
+      if (Array.isArray(bundled) && bundled.includes(child)) continue;
+      const ranges = byChild.get(child) ?? new Map<string, number>();
+      ranges.set(range, (ranges.get(range) ?? 0) + n);
+      byChild.set(child, ranges);
+    }
+  }
+  const out: [string, DependencyPull][] = [];
+  for (const [child, ranges] of byChild) {
+    const total = [...ranges.values()].reduce((a, b) => a + b, 0);
+    if (total < PULL_MIN_WEEKLY) continue;
+    const [range, rangeWeekly] = [...ranges].sort((a, b) => b[1] - a[1])[0];
+    out.push([child, { weekly: total, range, rangeWeekly }]);
+  }
+  return Object.fromEntries(out);
+}
+
+const README_HEAD = 2000; // a project says this near the top; further down it is usually about something else
+const MAINTENANCE_NOTE_MAX = 200;
+// "not maintained by Discord" and "no longer supported on Node 12" say something else, so the phrase must end the clause.
+const MAINTENANCE_RE = /\b(?:in maintenance mode|legacy project|unmaintained|no longer\s+(?:actively\s+)?(?:maintained|supported|developed)|not\s+(?:actively\s+)?(?:maintained|developed))\b(?!\s+(?:by|for|on|in|with|at|as|under)\b)/i;
+const TAKEN_OVER_RE = /\b(?:now|currently|still)\s+maintained\b|\bmaintained by\b/i;
+// Sentences that name it to describe something else: "based on foo, which is unmaintained".
+const ABOUT_ANOTHER_RE = /\b(?:fork|instead|replac|successor|alternative|based on|which)\b/i;
+
+// The README's own sentence about the project being unmaintained. Only a sentence about the project itself counts:
+// "Node 12 is no longer supported" or "a fork of the unmaintained foo" say nothing about it, so a false claim costs more
+// than a missed one.
+export function maintenanceNote(name: string, readme: unknown): string | undefined {
+  if (typeof readme !== 'string') return undefined;
+  const short = name.replace(/^@[^/]+\//, '').toLowerCase();
+  const text = readme
+    .slice(0, README_HEAD)
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // images
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links
+    .replace(/^\s*[>#]+\s*/gm, '') // quotes and headings
+    .replace(/[*`]/g, '');
+  for (const paragraph of text.split(/\n\s*\n/)) {
+    const sentences = paragraph.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/);
+    for (const [i, raw] of sentences.entries()) {
+      const sentence = raw.replace(/^[^\p{L}\p{N}]+/u, '').replace(/^(?:note|notice|warning|important)\s*:\s*/i, '').trim();
+      const lower = sentence.toLowerCase();
+      const aboutItself =
+        /^(?:this|the) (?:package|project|library|module|repo|repository|tool)\b/.test(lower) ||
+        lower.startsWith(`${short} `) ||
+        lower.startsWith(`${short}.js `);
+      if (!aboutItself || !MAINTENANCE_RE.test(sentence) || ABOUT_ANOTHER_RE.test(sentence)) continue;
+      // "No longer maintained by its author. It is now maintained by the community." reverses the quote.
+      return TAKEN_OVER_RE.test(sentences[i + 1] ?? '') ? undefined : clip(sentence, MAINTENANCE_NOTE_MAX);
+    }
+  }
+  return undefined;
 }
 
 // ponytail: we still download the full registry doc (several MB for react) because only it carries
 // `time`; the abbreviated install doc doesn't. Trimming here only keeps memory/fixtures small.
 export function trimRegistry(doc: any): RegistryDoc {
   const deprecated = doc.versions?.[doc['dist-tags']?.latest]?.deprecated;
+  const note = maintenanceNote(String(doc.name ?? ''), doc.readme);
   return {
     ...(Array.isArray(doc.maintainers) && { maintainerCount: doc.maintainers.length }),
     ...(typeof deprecated === 'string' && deprecated && { deprecated }),
+    ...(note && { maintenanceNote: note }),
     name: doc.name,
     description: doc.description,
     license: typeof doc.license === 'string' ? doc.license : doc.license?.type,
@@ -143,9 +213,26 @@ async function okJson(fetchImpl: typeof fetch, url: string): Promise<any> {
 }
 const count = (x: unknown): number | null => num(x) ?? null;
 
+// The signals that can change confidence, without the display-only calls (GitHub, top dependents). For the nightly
+// build and the compare page, which need confidence but not the evidence block. A failed source stays null.
+export async function fetchConfidenceEvidence(name: string, fetchImpl: typeof fetch = fetch): Promise<Evidence> {
+  const [pkg, cdn] = await Promise.all([
+    okJson(fetchImpl, `https://packages.ecosyste.ms/api/v1/registries/npmjs.org/packages/${encodeName(name)}`).catch(() => null),
+    okJson(fetchImpl, `https://data.jsdelivr.com/v1/stats/packages/npm/${name}?period=month`).catch(() => null),
+  ]);
+  return {
+    dependentPackages: count(pkg?.dependent_packages_count),
+    dependentRepos: count(pkg?.dependent_repos_count),
+    topDependents: [],
+    cdnHitsMonth: count(cdn?.hits?.total),
+    github: null,
+    codeSearchUrl: '',
+  };
+}
+
 export async function fetchEvidence(name: string, registry: RegistryDoc, fetchImpl: typeof fetch = fetch): Promise<Evidence> {
   // Verified live: ecosyste.ms accepts both "@scope/name" and "@scope%2Fname"; jsDelivr needs a raw "/"
-  // ("%2F" -> 400). Dependents sorted by downloads works (zod -> @zodios/core first).
+  // ("%2F" -> 400). This list is incomplete: zod's misses @modelcontextprotocol/sdk, so it is never "the biggest dependents".
   const eco = `https://packages.ecosyste.ms/api/v1/registries/npmjs.org/packages/${encodeName(name)}`;
   const repo = parseGithubRepo(registry.repository);
   const [pkg, deps, cdn, gh] = await Promise.all([

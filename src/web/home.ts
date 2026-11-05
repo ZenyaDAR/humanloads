@@ -1,13 +1,13 @@
 import { isValidPackageName, searchPackages } from '../core/sources.ts';
 import type { FeaturedFile, FeaturedRow, SearchHit } from '../core/types.ts';
-import { compareLinksHtml } from '../core/seo.ts';
+import { HOME_PITCH, NOISIEST_CAPTION, NOISIEST_NOTE, NOISIEST_TITLE, compareLinksHtml, homeFaqHtml, popularHtml, noiseBar, rangeText, roundCount } from '../core/seo.ts';
 import COMPARE_PAIRS from '../../data/compare.json';
 import {
   BASE, esc, fetchStatic, fmt, fmtCompact, fmtDate, navigate, pkgHref, METHODOLOGY_URL, headTools, timeAgo,
 } from './util.ts';
 
 const FEATURED_SHOWN = 6;
-const EXAMPLES_SHOWN = 4; // top of the "humans" list; bot-inflated names are long build artifacts
+const EXAMPLES_SHOWN = 4;
 let searchId = 0;
 let searchAbort: AbortController | null = null;
 // ponytail: unbounded per-page-load cache keyed by the trimmed lowercase query; a session types few queries.
@@ -18,7 +18,7 @@ export function renderHome(view: HTMLElement): void {
     <div class="home-top"></div>
     <section class="home">
       <h1 class="home-title" tabindex="-1">human<span class="home-title-mark">loads</span></h1>
-      <p class="home-pitch">npm counts every tarball fetch: mirrors, scanners, CI. <span class="hl">We estimate the humans.</span></p>
+      <p class="home-pitch">${HOME_PITCH}</p>
       <div class="home-search"></div>
       <p class="home-examples" aria-busy="true">
         <span class="hand">try one</span>
@@ -32,10 +32,11 @@ export function renderHome(view: HTMLElement): void {
       <ol>
         <li>Cut the spike every new version gets from mirrors in its first days.</li>
         <li>Subtract the flat floor robots download from <em>every</em> version each week.</li>
-        <li>Show what is left as a range, with an honest confidence level.</li>
+        <li>Show what is left as a range, with a confidence level. It still includes CI and dependency installs, so it is not a count of people.</li>
       </ol>
       <p><a href="${METHODOLOGY_URL}">Read the methodology</a></p>
-    </aside>`;
+    </aside>
+    ${homeFaqHtml(BASE)}`;
   view.querySelector('.home-top')!.append(headTools());
   view.querySelector('.home-search')!.append(searchBox('home'));
   const data = fetchStatic<FeaturedFile>('data/featured.json');
@@ -48,7 +49,7 @@ async function examples(host: HTMLElement, data: Promise<FeaturedFile | null>): 
   const f = await data;
   if (!host.isConnected) return;
   host.removeAttribute('aria-busy');
-  const names = Array.isArray(f?.humans) ? f.humans.slice(0, EXAMPLES_SHOWN).map((r) => r.name) : [];
+  const names = Array.isArray(f?.examples) ? f.examples.slice(0, EXAMPLES_SHOWN) : [];
   if (!names.length) return void host.remove();
   host.querySelectorAll('.sk-tag').forEach((t) => t.remove());
   host.insertAdjacentHTML('beforeend', names.map((n) => `<a class="tag" href="${esc(pkgHref(n))}">${esc(n)}</a>`).join(''));
@@ -71,45 +72,43 @@ const SKELETON_CARD = `<li><div class="fcard sk-fcard">
   <span class="fcard-name">&nbsp;</span>
   <span class="fcard-desc">&nbsp;<br>&nbsp;</span>
   <span class="fcard-nums">&nbsp;</span>
+  <span class="noise-bar noise-bar-mini"></span>
   <span class="pill">&nbsp;</span>
 </div></li>`;
 
 async function featured(host: HTMLElement, data: Promise<FeaturedFile | null>): Promise<void> {
   host.setAttribute('aria-busy', 'true');
   host.innerHTML = `<section class="fcards-sec">
-      <h2 class="section-title">Most real humans <span class="fcards-note hand">top by estimated human installs</span></h2>
+      <h2 class="section-title">${NOISIEST_TITLE} <span class="fcards-note hand">${NOISIEST_NOTE}</span></h2>
       <ul class="fcards" aria-hidden="true">${SKELETON_CARD.repeat(FEATURED_SHOWN)}</ul>
+      <p class="fineprint">${NOISIEST_CAPTION}</p>
     </section>
     <p class="fineprint">&nbsp;</p>`;
   const f = await data;
   if (!host.isConnected) return;
   host.removeAttribute('aria-busy');
   if (!f) return void host.replaceChildren();
-  const section = (rows: unknown, title: string, note: string, bots: boolean) =>
-    Array.isArray(rows) && rows.length
-      ? `<section class="fcards-sec">
-          <h2 class="section-title">${title} <span class="fcards-note hand">${note}</span></h2>
-          <ul class="fcards">${(rows as FeaturedRow[]).slice(0, FEATURED_SHOWN).map((r) => card(r, bots)).join('')}</ul>
-        </section>`
-      : '';
-  const html =
-    section(f.humans, 'Most real humans', 'top by estimated human installs', false) +
-    section(f.inflated, 'Most bot-inflated', 'where npm counts robots the most', true);
-  if (!html) return void host.replaceChildren();
+  const rows = Array.isArray(f.noisiest) ? f.noisiest.slice(0, FEATURED_SHOWN) : [];
+  const popular = popularHtml(BASE, Array.isArray(f.popular) ? f.popular : []);
+  if (!rows.length && !popular) return void host.replaceChildren();
+  const html = `${rows.length ? `<section class="fcards-sec">
+          <h2 class="section-title">${NOISIEST_TITLE} <span class="fcards-note hand">${NOISIEST_NOTE}</span></h2>
+          <ul class="fcards">${rows.map(card).join('')}</ul>
+          <p class="fineprint">${NOISIEST_CAPTION}</p>
+        </section>` : ''}${popular}`;
   host.innerHTML = `${html}<p class="fineprint">Updated ${esc(fmtDate(f.generated))}. Weekly numbers, last 7 days.</p>`;
 }
 
-function card(r: FeaturedRow, bots: boolean): string {
-  const low = Math.round(r.low);
-  const high = Math.round(r.high);
+function card(r: FeaturedRow): string {
   return `<li><a class="fcard" href="${esc(pkgHref(r.name))}">
     <span class="fcard-name">${esc(r.name)}</span>
-    ${bots ? `<span class="fcard-tag">${Math.round(r.inflation * 100)}% bots</span>` : ''}
+    <span class="fcard-tag">${Math.round(r.inflation * 100)}% noise</span>
     ${r.description ? `<span class="fcard-desc">${esc(r.description)}</span>` : ''}
     <span class="fcard-nums">
-      <s class="struck num" title="npm: ${esc(fmt(r.npmWeekly))} / week"><span class="sr-only">npm says </span>${esc(fmtCompact(r.npmWeekly))}</s>
-      <span class="fcard-human">≈ <mark>${esc(low === high ? fmtCompact(low) : `${fmtCompact(low)}–${fmtCompact(high)}`)}</mark> humans</span>
+      <s class="struck num" title="npm: ${esc(fmt(r.npmWeekly))} / week"><span class="sr-only">npm says </span>${esc(roundCount(r.npmWeekly))}</s>
+      <span class="fcard-human">≈ <mark>${esc(rangeText(r.low, r.high))}</mark> real installs</span>
     </span>
+    ${noiseBar(r.inflation, ' noise-bar-mini')}
     <span class="pill pill-${esc(r.confidence)}">${esc(r.confidence)}</span>
   </a></li>`;
 }

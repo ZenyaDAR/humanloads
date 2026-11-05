@@ -1,13 +1,15 @@
 // Pure helpers for scripts/build-data.mjs and scripts/prerender.mjs, kept apart from those scripts' top-level
 // network/file work so tests can import them. Only erasable TS syntax: Node runs this file by type stripping.
-import type { Calibration, FeaturedRow, RawPackageData, ShieldsBadge } from '../src/core/types.ts';
+import semver from 'semver';
+import type { Calibration, ChainStep, DeprecatedRow, FeaturedRow, InsightsFile, MarketGrowth, RawPackageData, ShieldsBadge } from '../src/core/types.ts';
 import { addDays, median } from '../src/core/estimate.ts';
 import { esc } from '../src/core/html.ts';
 import {
-  HOME_DESCRIPTION, HOME_TITLE, REPO_LINK_HTML, REPO_URL, SITE_NAME, compareDescription, compareLinksHtml, comparePath,
-  compareTitle, isIndexable, packageDescription, packageTitle,
+  FILTERED_NOTE, HOME_DESCRIPTION, HOME_PITCH, HOME_TITLE, NOISE_CAPTION, NOISIEST_CAPTION, NOISIEST_NOTE, NOISIEST_TITLE, REPO_LINK_HTML, REPO_URL, SITE_NAME, compareDescription, compareLinksHtml,
+  comparePath, compareTitle, deprecatedHtml, isIndexable, noiseBar, noiseText, numberCardsHtml, packageDescription, peopleAnswerHtml, popularHtml, homeFaqHtml, packageTitle, rangeText, roundCount,
 } from '../src/core/seo.ts';
-import { factsHtml } from '../src/core/insights.ts';
+import { MARKET_MIN_WEEKLY, adoptionHtml, chainHtml, factsHtml } from '../src/core/insights.ts';
+import { GUIDES, HOME_FAQ, type Guide } from '../src/core/guides.ts';
 import {
   METHODOLOGY_DESCRIPTION, METHODOLOGY_FAQ, METHODOLOGY_PATH, METHODOLOGY_SECTIONS, METHODOLOGY_TITLE, methodologyBody,
 } from '../src/core/methodology.ts';
@@ -15,8 +17,17 @@ import {
 export { esc };
 
 const FEATURED_SIZE = 8;
-const INFLATED_MIN_NPM = 100;
-const INFLATED_MIN_RATIO = 0.3;
+const EXAMPLES_SIZE = 4;
+const POPULAR_SIZE = 36; // internal links from the homepage, so crawlers reach package pages in one step
+const NOISY_MIN_NPM = 100;
+const NOISY_MIN_SHARE = 0.3;
+// A release puts a package in this list for days whatever its real use, so only settled packages qualify.
+const NOISY_MIN_AGE_DAYS = 30;
+const NOISY_QUIET_DAYS = 14;
+// The rolling catalog behind the package pages. At full size about 70 rows a night rotate, so a row waits about three weeks.
+export const CATALOG_MAX = 1500;
+const CATALOG_STALE_DAYS = 60;
+const DAY_MS = 86_400_000;
 const OLD_VERSION_DAYS = 14; // same cutoff as estimate.ts step B
 // ponytail: sanity ceiling, not a measurement (the default floor is 3). A higher canary reading means the name was
 // taken over or inflated, so ignore it. Tune it once real canary data exists.
@@ -65,14 +76,165 @@ export function poolFailure(
   return null;
 }
 
-export function selectFeatured(all: FeaturedRow[]): { humans: FeaturedRow[]; inflated: FeaturedRow[] } {
-  const humans = [...all].sort((a, b) => b.organicWeekly - a.organicWeekly).slice(0, FEATURED_SIZE);
-  // Fewer than FEATURED_SIZE qualifying rows -> a shorter list, never padded with barely inflated ones.
-  const inflated = all
-    .filter((r) => r.npmWeekly >= INFLATED_MIN_NPM && r.inflation >= INFLATED_MIN_RATIO)
+const daysBetween = (from: string, to: string) => (Date.parse(to) - Date.parse(from)) / DAY_MS;
+
+function settledAndNoisy(r: FeaturedRow): boolean {
+  const f = r.facts;
+  if (!f?.firstPublished || !f.lastRelease || f.deprecated || r.tooNew || r.confidence === 'low') return false;
+  return (
+    r.npmWeekly >= NOISY_MIN_NPM &&
+    r.inflation >= NOISY_MIN_SHARE &&
+    daysBetween(f.firstPublished, f.asOf) >= NOISY_MIN_AGE_DAYS &&
+    daysBetween(f.lastPublish ?? f.lastRelease.day, f.asOf) >= NOISY_QUIET_DAYS
+  );
+}
+
+export function selectFeatured(all: FeaturedRow[]): { examples: string[]; popular: string[]; noisiest: FeaturedRow[] } {
+  const popular = [...all].sort((a, b) => b.npmWeekly - a.npmWeekly).slice(0, POPULAR_SIZE).map((r) => r.name);
+  const examples = popular.slice(0, EXAMPLES_SIZE);
+  // One package per scope, so a single project can't fill the list. Fewer than FEATURED_SIZE qualifying rows give a
+  // shorter list, never one padded with barely noisy packages.
+  const scopes = new Set<string>();
+  const noisiest = all
+    .filter(settledAndNoisy)
     .sort((a, b) => b.inflation - a.inflation || b.npmWeekly - a.npmWeekly)
+    .filter((r) => {
+      if (!r.name.startsWith('@')) return true;
+      const scope = r.name.split('/')[0];
+      if (scopes.has(scope)) return false;
+      scopes.add(scope);
+      return true;
+    })
     .slice(0, FEATURED_SIZE);
-  return { humans, inflated };
+  return { examples, popular, noisiest };
+}
+
+// ---------- insights.json: what can be derived from the whole catalog ----------
+
+const DEPRECATED_MIN_WEEKLY = 10_000;
+const DEPRECATED_SIZE = 100;
+const CHAIN_MIN_WEEKLY = 100_000;
+const CHAIN_MAX_STEPS = 6;
+const PARENT_MIN_SHARE = 0.3; // a dependent carrying less than this doesn't change the story, more than one means a fork
+const PARENT_MIN_EXPLAINED = 0.5; // pages say "mostly through other packages", so the parent must carry at least half
+const [MATCH_LOW, MATCH_HIGH] = [0.7, 1.3];
+const DEPRECATED_NIGHTLY = 20;
+
+export function deprecatedRows(rows: FeaturedRow[]): DeprecatedRow[] {
+  return rows
+    // @types stubs are deprecated by design once a package ships its own types: a long list saying nothing.
+    .filter((r) => r.facts?.deprecated && !r.name.startsWith('@types/') && r.npmWeekly >= DEPRECATED_MIN_WEEKLY)
+    .sort((a, b) => b.npmWeekly - a.npmWeekly)
+    .slice(0, DEPRECATED_SIZE)
+    .map((r) => ({
+      name: r.name,
+      npmWeekly: r.npmWeekly,
+      message: r.facts!.deprecated!,
+      ...(r.facts!.lastRelease && { lastRelease: r.facts!.lastRelease.day }),
+    }));
+}
+
+// The top of the list is refreshed every night, like the homepage: it says their maintainers retired them, and that can change.
+export const deprecatedToRefresh = (rows: FeaturedRow[]): string[] => deprecatedRows(rows).slice(0, DEPRECATED_NIGHTLY).map((r) => r.name);
+
+export function marketGrowth(rows: FeaturedRow[]): MarketGrowth {
+  const values = rows.filter((r) => r.npmWeekly >= MARKET_MIN_WEEKLY && typeof r.facts?.growth11m === 'number').map((r) => r.facts!.growth11m!);
+  return { growth11m: values.length ? median(values) : null, packages: values.length };
+}
+
+// Which single catalog package explains most of `child`'s downloads, if one does. A parent only counts when the range it
+// asks for covers the child's most used version and the downloads on both sides line up: anything looser would name a
+// parent for every popular package. Parents outside the catalog are invisible, so a missed fork stays possible.
+function soleParent(child: FeaturedRow, parentsOf: Map<string, FeaturedRow[]>): FeaturedRow | null {
+  const top = child.facts?.adoption;
+  if (!top) return null;
+  const big = (parentsOf.get(child.name) ?? []).filter((p) => p.pulls![child.name].weekly >= PARENT_MIN_SHARE * child.npmWeekly);
+  if (big.length !== 1) return null;
+  const pull = big[0].pulls![child.name];
+  const topWeekly = top.topShare * child.organicWeekly;
+  const ratio = topWeekly > 0 ? pull.rangeWeekly / topWeekly : 0;
+  // The top version alone isn't enough: 14M downloads can match a version without saying anything about the other 165M.
+  if (pull.rangeWeekly < PARENT_MIN_EXPLAINED * child.npmWeekly) return null;
+  return ratio >= MATCH_LOW && ratio <= MATCH_HIGH && semver.satisfies(top.topVersion, pull.range) ? big[0] : null;
+}
+
+export function dependencyChains(rows: FeaturedRow[]): Record<string, ChainStep[]> {
+  const parentsOf = new Map<string, FeaturedRow[]>();
+  for (const r of rows) {
+    for (const child of Object.keys(r.pulls ?? {})) parentsOf.set(child, [...(parentsOf.get(child) ?? []), r]);
+  }
+  const step = (r: FeaturedRow): ChainStep => ({ name: r.name, ...(r.facts?.adoption && { version: r.facts.adoption.topVersion }), weekly: r.npmWeekly });
+  const chains: [string, ChainStep[]][] = [];
+  for (const r of rows) {
+    if (r.npmWeekly < CHAIN_MIN_WEEKLY) continue;
+    const trail = [r];
+    for (let p = soleParent(r, parentsOf); p && trail.length < CHAIN_MAX_STEPS && !trail.includes(p); p = soleParent(p, parentsOf)) trail.push(p);
+    if (trail.length >= 2) chains.push([r.name, trail.map(step)]);
+  }
+  return Object.fromEntries(chains);
+}
+
+export function buildInsights(rows: FeaturedRow[], generated: string): InsightsFile {
+  return { generated, market: marketGrowth(rows), deprecated: deprecatedRows(rows), chains: dependencyChains(rows) };
+}
+
+// ---------- rolling catalog: pages stay up between builds, only the numbers rotate ----------
+
+// What a previous summary.json gives this build. With another model version its numbers can't be mixed with new ones, but
+// its names stay `pending`: their pages keep working with generic text until they get their turn, instead of turning into 404s.
+export function readPrevious(body: unknown, model: string): { rows: Record<string, FeaturedRow>; pending: string[] } {
+  const b = body as { model?: string; packages?: Record<string, FeaturedRow>; pending?: string[] } | null;
+  if (!b?.packages || typeof b.packages !== 'object') throw new Error('summary.json has no packages');
+  const pending = Array.isArray(b.pending) ? b.pending : [];
+  return b.model === model ? { rows: b.packages, pending } : { rows: {}, pending: [...new Set([...Object.keys(b.packages), ...pending])] };
+}
+
+// Which packages to fetch tonight: required ones, then a share of what is left for names new to the catalog (half
+// while it grows, a quarter once full), then the rows that have waited longest. Unused budget goes to more new names.
+const TOP_PAGES_PER_RUN = 5;
+const TOP_DEPTH = 30; // pages of 100, so about six nights to pass the top 3,000 and start over
+
+// Which pages of the downloads ranking to read on this day.
+export function topPages(dayNumber: number): number[] {
+  const start = (dayNumber * TOP_PAGES_PER_RUN) % TOP_DEPTH;
+  return Array.from({ length: TOP_PAGES_PER_RUN }, (_, i) => ((start + i) % TOP_DEPTH) + 1);
+}
+
+export function refreshPlan(must: string[], seeds: string[], previous: Record<string, FeaturedRow>, budget: number): string[] {
+  const plan = new Set(must);
+  const fresh = [...new Set(seeds)].filter((n) => !Object.hasOwn(previous, n) && !plan.has(n));
+  const stalest = Object.values(previous)
+    .filter((r) => !plan.has(r.name))
+    .sort((a, b) => (a.updated ?? '').localeCompare(b.updated ?? ''))
+    .map((r) => r.name);
+  const newShare = Math.ceil(Math.max(0, budget - plan.size) / (Object.keys(previous).length >= CATALOG_MAX ? 4 : 2));
+  for (const n of fresh.slice(0, newShare)) plan.add(n);
+  for (const n of stalest) if (plan.size < budget) plan.add(n);
+  for (const n of fresh) if (plan.size < budget) plan.add(n);
+  return [...plan];
+}
+
+// Fresh rows over the previous ones. Unpublished packages, blocked names and rows nobody could refresh for weeks
+// leave; past the cap the smallest by npm's count go first (by real installs, the noisiest packages would always go
+// first and the homepage list would run dry), never the `keep` names that badges and compare pages rely on, and never
+// a row fetched tonight, or a small new name would be fetched and thrown away again every night.
+export function mergeCatalog(
+  previous: Record<string, FeaturedRow>,
+  fresh: Map<string, FeaturedRow>,
+  opts: { gone: { has(name: string): boolean }; blocked: { has(name: string): boolean }; keep: { has(name: string): boolean }; now: string; max?: number },
+): Record<string, FeaturedRow> {
+  const rows = new Map(Object.entries(previous));
+  for (const [name, row] of fresh) rows.set(name, row);
+  for (const [name, row] of rows) {
+    const stale = !row.updated || daysBetween(row.updated, opts.now) > CATALOG_STALE_DAYS;
+    if (opts.gone.has(name) || opts.blocked.has(name) || (stale && !opts.keep.has(name))) rows.delete(name);
+  }
+  const extra = rows.size - (opts.max ?? CATALOG_MAX);
+  if (extra > 0) {
+    const smallest = [...rows.values()].filter((r) => !opts.keep.has(r.name) && !fresh.has(r.name)).sort((a, b) => a.npmWeekly - b.npmWeekly);
+    for (const r of smallest.slice(0, extra)) rows.delete(r.name);
+  }
+  return Object.fromEntries(rows);
 }
 
 export function compactCount(n: number): string {
@@ -84,8 +246,8 @@ export function compactCount(n: number): string {
 
 const COLORS = { high: 'brightgreen', medium: 'yellow', low: 'lightgrey' } as const;
 
-export function badgeFor(row: Pick<FeaturedRow, 'organicWeekly' | 'confidence'>): ShieldsBadge {
-  return { schemaVersion: 1, label: 'humans/week', message: `≈ ${compactCount(row.organicWeekly)}`, color: COLORS[row.confidence] };
+export function badgeFor(row: Pick<FeaturedRow, 'organicWeekly' | 'confidence' | 'tooNew'>): ShieldsBadge {
+  return { schemaVersion: 1, label: 'real installs/week', message: row.tooNew ? 'too new' : `≈ ${compactCount(row.organicWeekly)}`, color: COLORS[row.confidence] };
 }
 
 // "@scope/name" -> "scope__name": a flat file name for badges and fixtures.
@@ -100,9 +262,8 @@ const day = (iso: string | undefined) => {
     ? null
     : new Date(t).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
 };
-const range = (r: Pick<FeaturedRow, 'low' | 'high'>) =>
-  Math.round(r.low) === Math.round(r.high) ? fmt(r.low) : `${fmt(r.low)}–${fmt(r.high)}`;
-const botShare = (inflation: number) => (inflation < 0.01 ? 'less than 1%' : `${Math.round(inflation * 100)}%`);
+const range = (r: Pick<FeaturedRow, 'low' | 'high'>) => rangeText(r.low, r.high);
+const noiseShare = (r: Pick<FeaturedRow, 'npmWeekly' | 'organicWeekly' | 'tooNew'>) => noiseText(r.npmWeekly, r.organicWeekly, r.tooNew);
 
 // <script type="application/ld+json"> body; "<" is escaped so no string can close the script tag.
 export function jsonLd(data: unknown): string {
@@ -160,7 +321,7 @@ const masthead = (base: string) =>
 const METHOD_STEPS = `<ol>
         <li>Cut the spike every new version gets from mirrors in its first days.</li>
         <li>Subtract the flat floor robots download from <em>every</em> version each week.</li>
-        <li>Show what is left as a range, with an honest confidence level.</li>
+        <li>Show what is left as a range, with a confidence level. It still includes CI and dependency installs, so it is not a count of people.</li>
       </ol>`;
 
 function website(site: string) {
@@ -171,6 +332,7 @@ export interface PackagePageOpts {
   generated?: string; // summary.json timestamp
   related?: string[]; // other prerendered packages to link to
   comparisons?: string[][]; // prerendered compare pages that include this package
+  insights?: InsightsFile | null;
 }
 
 export function prerenderHtml(
@@ -188,33 +350,17 @@ export function prerenderHtml(
   const npmUrl = `https://www.npmjs.com/package/${name}`;
 
   const numbers = r
-    ? `<section class="cards" aria-label="Downloads in the last 7 days">
-        <div class="card card-npm">
-          <h2 class="card-label">npm says</h2>
-          <p class="card-big"><s class="struck">${fmt(r.npmWeekly)}</s><span class="per"> / week</span></p>
-          <p class="card-sub">Every tarball fetch: mirrors, scanners, CI and people.</p>
-        </div>
-        <div class="card card-human">
-          <h2 class="card-label">probably humans</h2>
-          <p class="card-big">≈ <mark>${range(r)}</mark><span class="per"> / week</span></p>
-          <p class="card-point">best guess <strong>${fmt(r.organicWeekly)}</strong>
-            <span class="pill pill-${esc(r.confidence)}">${esc(r.confidence)} confidence</span></p>
-        </div>
-      </section>
+    ? `${numberCardsHtml({ npm: r.npmWeekly, organic: r.organicWeekly, low: r.low, high: r.high, confidence: r.confidence, tooNew: r.tooNew })}
+      ${adoptionHtml(r.facts)}
       <p class="fineprint">Snapshot from the daily build${asOf ? ` of ${esc(asOf)}` : ''}, last 7 days of npm data. With JavaScript on, this page recomputes it live from the npm API.</p>
-      <section>
-        <h2 class="section-title">How many people actually use ${esc(name)}?</h2>
-        <p>npm counted ${fmt(r.npmWeekly)} downloads of ${esc(name)} in the last 7 days. That count includes every tarball fetch:
-          registry mirrors, security scanners, CI pipelines and crawlers as well as people.
-          humanloads estimates that about ${fmt(r.organicWeekly)} of them (likely range ${range(r)}) were real human installs,
-          with ${esc(r.confidence)} confidence. That puts ${botShare(r.inflation)} of npm's weekly count down to robots.</p>
-      </section>
-      ${r.facts ? factsHtml(name, r.facts) : ''}`
+      ${peopleAnswerHtml(name, { npm: r.npmWeekly, organic: r.organicWeekly, low: r.low, high: r.high, confidence: r.confidence, tooNew: r.tooNew })}
+      ${r.facts ? factsHtml(name, r.facts, opts.insights?.market, r.npmWeekly) : ''}
+      ${chainHtml(name, opts.insights?.chains[name], base)}`
     : `<section>
         <h2 class="section-title">What this page shows</h2>
         <p>npm's download count for ${esc(name)} includes every tarball fetch: registry mirrors, security scanners,
           CI pipelines and crawlers as well as people. This page fetches the last 12 months from the npm API and
-          estimates how many of those downloads were real human installs, as a weekly range with a confidence level.</p>
+          removes the mirror spikes and the crawler floor, then shows the real installs as a weekly range with a confidence level.</p>
       </section>`;
 
   const related = (opts.related ?? []).filter((n) => n !== name);
@@ -225,6 +371,7 @@ export function prerenderHtml(
         <h1 tabindex="-1"><span class="pkg-name">${esc(name)}</span></h1>
         ${r?.description ? `<p class="pkg-desc">${esc(r.description)}</p>` : ''}
         <ul class="pkg-links"><li><a href="${esc(npmUrl)}">npm</a></li></ul>
+        ${r?.facts?.deprecated ? deprecatedHtml(r.facts.deprecated) : ''}
       </header>
       ${numbers}
       <section>
@@ -273,59 +420,55 @@ export function prerenderHtml(
   return withPage(shell, { title, description, url, body, jsonLd: ld, noindex: !isIndexable(r) });
 }
 
-const span = (r: FeaturedRow) => {
-  const low = Math.round(r.low);
-  const high = Math.round(r.high);
-  return low === high ? compactCount(low) : `${compactCount(low)}–${compactCount(high)}`;
-};
-
 // Same markup as the SPA's home cards (src/web/home.ts), so the swap on boot looks alike.
-function homeCard(r: FeaturedRow, base: string, bots: boolean): string {
+function homeCard(r: FeaturedRow, base: string): string {
   return `<li><a class="fcard" href="${esc(base + r.name)}">
     <span class="fcard-name">${esc(r.name)}</span>
-    ${bots ? `<span class="fcard-tag">${Math.round(r.inflation * 100)}% bots</span>` : ''}
+    <span class="fcard-tag">${Math.round(r.inflation * 100)}% noise</span>
     ${r.description ? `<span class="fcard-desc">${esc(r.description)}</span>` : ''}
     <span class="fcard-nums">
-      <s class="struck num"><span class="sr-only">npm says </span>${compactCount(r.npmWeekly)}</s>
-      <span class="fcard-human">≈ <mark>${span(r)}</mark> humans</span>
+      <s class="struck num"><span class="sr-only">npm says </span>${roundCount(r.npmWeekly)}</s>
+      <span class="fcard-human">≈ <mark>${range(r)}</mark> real installs</span>
     </span>
+    ${noiseBar(r.inflation, ' noise-bar-mini')}
     <span class="pill pill-${esc(r.confidence)}">${esc(r.confidence)}</span>
   </a></li>`;
 }
 
 export interface Featured {
   generated?: string;
-  humans?: FeaturedRow[];
-  inflated?: FeaturedRow[];
+  examples?: string[];
+  popular?: string[];
+  noisiest?: FeaturedRow[];
 }
 
 // index.html: the home page with its featured lists as static links, so crawlers find the package pages.
 export function homeHtml(shell: string, site: string, featured: Featured | null, pairs: string[][] = []): string {
   const base = new URL(site).pathname;
-  const section = (rows: FeaturedRow[] | undefined, title: string, note: string, bots: boolean) =>
-    Array.isArray(rows) && rows.length
-      ? `<section class="fcards-sec">
-        <h2 class="section-title">${title} <span class="fcards-note hand">${note}</span></h2>
-        <ul class="fcards">${rows.slice(0, 6).map((r) => homeCard(r, base, bots)).join('')}</ul>
+  const noisiest = featured?.noisiest?.length
+    ? `<section class="fcards-sec">
+        <h2 class="section-title">${NOISIEST_TITLE} <span class="fcards-note hand">${NOISIEST_NOTE}</span></h2>
+        <ul class="fcards">${featured.noisiest.slice(0, 6).map((r) => homeCard(r, base)).join('')}</ul>
+        <p class="fineprint">${NOISIEST_CAPTION}</p>
       </section>`
-      : '';
+    : '';
   const asOf = day(featured?.generated);
   const body = `<div class="view">
     <div class="home-top">${headTools}</div>
     <section class="home">
       <h1 class="home-title" tabindex="-1">human<span class="home-title-mark">loads</span></h1>
-      <p class="home-pitch">npm counts every tarball fetch: mirrors, scanners, CI. <span class="hl">We estimate the humans.</span></p>
+      <p class="home-pitch">${HOME_PITCH}</p>
       <div class="home-search">${searchStandIn('home', 'package name, e.g. zod')}</div>
       ${
-        featured?.humans?.length
+        featured?.examples?.length
           ? `<p class="home-examples"><span class="hand">try one</span>
-        ${featured.humans.slice(0, 4).map((r) => `<a class="tag" href="${esc(base + r.name)}">${esc(r.name)}</a>`).join('')}</p>`
+        ${featured.examples.slice(0, 4).map((n) => `<a class="tag" href="${esc(base + n)}">${esc(n)}</a>`).join('')}</p>`
           : ''
       }
     </section>
     <div class="featured">
-      ${section(featured?.humans, 'Most real humans', 'top by estimated human installs', false)}
-      ${section(featured?.inflated, 'Most bot-inflated', 'where npm counts robots the most', true)}
+      ${noisiest}
+      ${popularHtml(base, featured?.popular ?? [])}
       ${asOf ? `<p class="fineprint">Updated ${esc(asOf)}. Weekly numbers, last 7 days.</p>` : ''}
     </div>
     ${compareLinksHtml(base, pairs, esc)}
@@ -334,6 +477,7 @@ export function homeHtml(shell: string, site: string, featured: Featured | null,
       ${METHOD_STEPS}
       <p><a href="${esc(base + METHODOLOGY_PATH)}">Read the methodology</a></p>
     </aside>
+    ${homeFaqHtml(base)}
   </div>`;
   const ld = {
     '@context': 'https://schema.org',
@@ -342,23 +486,24 @@ export function homeHtml(shell: string, site: string, featured: Featured | null,
       {
         '@type': 'Dataset',
         '@id': `${site}#dataset`,
-        name: 'Estimated human installs of npm packages',
+        name: 'npm download stats and real installs',
         description:
-          'Weekly npm download counts next to an estimate of real human installs, after removing registry mirrors, ' +
-          'security scanners and crawlers. Rebuilt daily from the public npm downloads API.',
+          'Weekly npm download counts next to real installs: what remains after removing publish spikes from registry ' +
+          'mirrors and scanners, and the crawler floor. Part of the catalog is refreshed daily from the public npm downloads API.',
         url: site,
         isAccessibleForFree: true,
         license: 'https://github.com/ZenyaDAR/humanloads/blob/main/LICENSE',
         creator: { '@type': 'Person', name: 'Yevhenii Dziza', url: 'https://github.com/ZenyaDAR' },
         keywords: ['npm', 'downloads', 'bot traffic', 'package popularity'],
         measurementTechnique: 'Publish-spike removal and per-version crawler floor subtraction',
-        variableMeasured: ['npm weekly downloads', 'estimated weekly human installs', 'confidence'],
+        variableMeasured: ['npm weekly downloads', 'estimated weekly real installs', 'confidence'],
         ...(featured?.generated && { dateModified: featured.generated }),
         distribution: [
           { '@type': 'DataDownload', encodingFormat: 'application/json', contentUrl: `${site}data/summary.json` },
           { '@type': 'DataDownload', encodingFormat: 'application/json', contentUrl: `${site}data/featured.json` },
         ],
       },
+      { '@type': 'FAQPage', '@id': `${site}#faq`, mainEntity: HOME_FAQ.map(([q, a]) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })) },
     ],
   };
   return withPage(shell, { title: HOME_TITLE, description: HOME_DESCRIPTION, url: site, body, jsonLd: ld });
@@ -383,32 +528,34 @@ export function compareHtml(
   const vs = names.map(esc).join(' vs ');
   const known = rows.every(Boolean) ? (rows as FeaturedRow[]) : null;
 
-  // "Which is more popular?" answered in one sentence, by estimated humans rather than raw downloads.
+  // "Which is more popular?" answered in one sentence, by real installs rather than raw downloads.
   let answer = '';
-  if (known) {
+  if (known && !known.some((r) => r.tooNew)) {
     const order = names.map((n, i) => ({ n, r: known[i] })).sort((a, b) => b.r.organicWeekly - a.r.organicWeekly);
     const [top, next] = order;
     const ratio = next.r.organicWeekly > 0 ? top.r.organicWeekly / next.r.organicWeekly : null;
-    answer = `<p>By estimated real human installs, <strong>${esc(top.n)}</strong> is ahead of ${esc(next.n)}${
+    answer = `<p>By real installs, <strong>${esc(top.n)}</strong> is ahead of ${esc(next.n)}${
       ratio && ratio >= 1.1 ? ` by about ${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}×` : ', and the two are close'
-    }: about ${fmt(top.r.organicWeekly)} vs ${fmt(next.r.organicWeekly)} a week. npm's raw counts are
-      ${known.map((r, i) => `${fmt(r.npmWeekly)} for ${esc(names[i])}`).join(' and ')}, which include mirrors, scanners and crawlers.</p>`;
+    }: about ${roundCount(top.r.organicWeekly)} vs ${roundCount(next.r.organicWeekly)} a week. npm's raw counts are
+      ${known.map((r, i) => `${fmt(r.npmWeekly)} for ${esc(names[i])}`).join(' and ')}, which include mirrors, scanners and crawlers.
+      ${esc(FILTERED_NOTE)}</p>`;
   }
 
   const table = known
     ? `<div class="table-wrap"><table class="cmp-table">
-        <thead><tr><th scope="col">package</th><th scope="col" class="num">npm / week</th><th scope="col" class="num">humans / week</th>
-          <th scope="col" class="num">inflation</th><th scope="col">confidence</th></tr></thead>
+        <thead><tr><th scope="col">package</th><th scope="col" class="num">npm / week</th><th scope="col" class="num">real installs / week</th>
+          <th scope="col" class="num">noise</th><th scope="col">confidence</th></tr></thead>
         <tbody>${known
           .map(
             (r, i) => `<tr><th scope="row"><a href="${esc(base + names[i])}">${esc(names[i])}</a></th>
             <td class="num" data-label="npm / week">${fmt(r.npmWeekly)}</td>
-            <td class="num above" data-label="humans / week">${range(r)}</td>
-            <td class="num" data-label="inflation">${botShare(r.inflation)}</td>
+            <td class="num above" data-label="real installs / week">${range(r)}</td>
+            <td class="num" data-label="noise">${noiseShare(r)}</td>
             <td data-label="confidence"><span class="pill pill-${esc(r.confidence)}">${esc(r.confidence)}</span></td></tr>`,
           )
           .join('')}</tbody>
       </table></div>
+      <p class="fineprint">${NOISE_CAPTION}</p>
       <p class="fineprint">Snapshot from the daily build${asOf ? ` of ${esc(asOf)}` : ''}, last 7 days of npm data. With JavaScript on, this page recomputes it live with a 12-month chart.</p>`
     : '';
 
@@ -418,7 +565,7 @@ export function compareHtml(
       <header class="pkg-head"><h1 tabindex="-1">${names.map((n) => `<span class="pkg-name">${esc(n)}</span>`).join(' <span class="vs hand">vs</span> ')}</h1></header>
       <figure class="chart-fig">
         <figcaption>
-          <h2 class="section-title">Estimated humans, week by week</h2>
+          <h2 class="section-title">Real installs, week by week</h2>
           <ul class="legend">
             ${names.map((n, i) => `<li><span class="key key-line" style="--c:var(${COMPARE_COLORS[i]})" aria-hidden="true"></span>${esc(n)}</li>`).join('')}
             <li><span class="key key-npm" aria-hidden="true"></span>npm downloads (same color, dashed)</li>
@@ -430,7 +577,7 @@ export function compareHtml(
       <section class="versions">
         <h2 class="section-title">${vs}: which is more popular?</h2>
         ${table}
-        ${answer || `<p>npm's weekly download counts for ${vs} compared with estimated real human installs, week by week.</p>`}
+        ${answer || `<p>npm's weekly download counts for ${vs}, with mirror spikes and crawler traffic removed, week by week.</p>`}
       </section>
       <section>
         <h2 class="section-title">How the estimate works</h2>
@@ -510,14 +657,45 @@ export function methodologyHtml(shell: string, site: string, modified?: string):
   return withPage(shell, { title: METHODOLOGY_TITLE, description: METHODOLOGY_DESCRIPTION, url, body, jsonLd: ld });
 }
 
+// docs/<guide>.html: a short answer to one plain question.
+export function guideHtml(shell: string, site: string, guide: Guide, insights?: InsightsFile | null): string {
+  const base = new URL(site).pathname;
+  const url = site + guide.path;
+  const name = guide.title.replace(/ · .*$/, '');
+  const ld = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      website(site),
+      { '@type': 'TechArticle', '@id': url, url, headline: name, description: guide.description, inLanguage: 'en', isPartOf: { '@id': `${site}#website` }, breadcrumb: { '@id': `${url}#breadcrumb` } },
+      {
+        '@type': 'BreadcrumbList',
+        '@id': `${url}#breadcrumb`,
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: SITE_NAME, item: site },
+          { '@type': 'ListItem', position: 2, name, item: url },
+        ],
+      },
+    ],
+  };
+  return withPage(shell, {
+    title: guide.title,
+    description: guide.description,
+    url,
+    body: `<div class="view">${masthead(base)}${guide.body(base, insights)}</div>`,
+    jsonLd: ld,
+    noindex: guide.ready ? !guide.ready(insights) : false,
+  });
+}
+
 // ---------- crawler files ----------
 
-export function sitemapXml(urls: string[], lastmod?: string): string {
-  const mod =
-    lastmod && !Number.isNaN(Date.parse(lastmod)) ? `<lastmod>${new Date(lastmod).toISOString().slice(0, 10)}</lastmod>` : '';
+// `perUrl` holds the date a package's row was really refreshed; rows rotate, so a single date would overstate it.
+export function sitemapXml(urls: string[], lastmod?: string, perUrl: Record<string, string | undefined> = {}): string {
+  const mod = (iso?: string) =>
+    iso && !Number.isNaN(Date.parse(iso)) ? `<lastmod>${new Date(iso).toISOString().slice(0, 10)}</lastmod>` : '';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${urls.map((u) => `  <url><loc>${esc(u)}</loc>${mod}</url>`).join('\n')}
+${urls.map((u) => `  <url><loc>${esc(u)}</loc>${mod(perUrl[u] ?? lastmod)}</url>`).join('\n')}
 </urlset>
 `;
 }
@@ -552,22 +730,25 @@ export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }
       ({ name, row }) =>
         `- [${name}](${site}${name})` +
         (row
-          ? `: ~${fmt(row.organicWeekly)} human installs/week (range ${range(row)}, ${row.confidence} confidence) vs ${fmt(row.npmWeekly)} npm downloads`
+          ? `: ${row.tooNew ? 'too new to tell,' : `~${roundCount(row.organicWeekly)} real installs/week`} (range ${range(row)}, ${row.confidence} confidence) vs ${fmt(row.npmWeekly)} npm downloads`
           : ''),
     )
     .join('\n');
   return `# ${SITE_NAME}
 
 > npm's download counter counts every tarball fetch: registry mirrors, security scanners, CI and crawlers.
-> humanloads estimates how many of an npm package's weekly downloads are real human installs, as a range with a confidence level.
+> humanloads removes publish spikes and the crawler floor from an npm package's weekly downloads and reports what remains as "real installs", a range with a confidence level.
+> Real installs still include CI runs, Docker builds and installs as a dependency of other packages, so they are not a count of people. No public data can give that number.
 
 ## Method
 
 - Every new version gets a burst of downloads from mirrors and scanners in its first days; that spike is removed.
 - Crawlers download every published version at a roughly flat weekly rate (the per-version floor); that floor is subtracted.
 - What remains is reported as a weekly range with a confidence level (high, medium or low). Small packages get wide, low-confidence ranges.
-- Independent evidence of use (dependent packages and repositories, jsDelivr CDN hits, GitHub activity) is shown next to the estimate.
+- "high" also needs independent evidence of use (dependent packages or repositories, jsDelivr CDN hits). Direct tarball requests pass both filters, so volume alone never earns it.
+- Packages under two weeks old are marked as too new to tell.
 - [Full methodology](${site}${METHODOLOGY_PATH}): the math, the thresholds, the limits and an FAQ
+${GUIDES.map((g) => `- [${g.title.replace(/ · .*$/, '')}](${site}${g.path})`).join('\n')}
 
 ## URLs
 
@@ -576,10 +757,11 @@ export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }
 - Compare 2–3 packages: ${site}compare/<a>,<b>[,<c>]
 - Pages compute live numbers in the browser from the public npm API. Prerendered pages also carry the daily build's numbers as static HTML.
 
-## Data (JSON, rebuilt daily${asOf ? `, last build ${asOf}` : ''})
+## Data (JSON, part of the catalog refreshed daily${asOf ? `, last build ${asOf}` : ''})
 
-- [summary.json](${site}data/summary.json): per package: npmWeekly, organicWeekly (estimated humans), low, high, inflation (bot share, 0–1), confidence
-- [featured.json](${site}data/featured.json): the homepage lists, most real humans and most bot-inflated
+- [summary.json](${site}data/summary.json): per package: npmWeekly, organicWeekly (real installs), low, high, inflation (noise share, 0–1), confidence, tooNew, updated (date of that row)
+- [featured.json](${site}data/featured.json): examples, and noisiest: settled packages with the most noise in npm's count
+- [insights.json](${site}data/insights.json): deprecated (the most downloaded deprecated packages), chains (dependency trails), market (median growth)
 - [badges/index.json](${site}badges/index.json): packages with a shields.io endpoint badge at ${site}badges/<name>.json (\`@scope/name\` is written \`scope__name\`)
 
 ## Package pages

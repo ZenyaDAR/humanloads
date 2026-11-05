@@ -1,9 +1,10 @@
-# Methodology: how we estimate real installs
+# Methodology: how we filter npm download counts
 
 > A shorter, reader-friendly version of these notes lives on the site: https://humanloads.dev/docs/methodology
 
-> The core rule of the project: we show an **estimate with an honest margin of error**, not an "exact number of users".
-> Nobody has an exact number, including npm itself.
+> We report **real installs**: npm's count without publish spikes from mirrors and without the crawler floor.
+> **This is not a count of people.** CI runs, Docker builds and dependency installs all remain, and no public data can
+> separate them. The filter helps most on small packages, where these two patterns can be most of the count.
 
 ## 1. What npm actually counts
 
@@ -29,11 +30,11 @@ Uniqueness, IP, User-Agent and client type are not taken into account. The count
 
 Downloads per version over the last week: `0.1.0: 3, 0.2.0: 3, 0.2.1: 3, 0.3.0: 3, 0.3.1: 3, 0.4.0: 5`.
 Every version received exactly 3 downloads. This is how a robot behaves when it downloads all versions in a row once a week.
-Above that floor there are only **2** downloads of the latest version. Of 20 weekly downloads, roughly 2 look organic.
+Above that floor there are only **2** downloads of the latest version. Of 20 weekly downloads, roughly 2 are left after filtering.
 
 This matches the Tenable research: ~100-150 automated downloads for every new version.
 
-## 3. Model v1 (MVP)
+## 3. Model v2
 
 Inputs (all public, CORS is open):
 - `GET https://api.npmjs.org/downloads/range/<from>:<to>/<pkg>`: downloads per day (up to 18 months per request).
@@ -44,7 +45,8 @@ Inputs (all public, CORS is open):
 1. For each publish day `p`, take the window `[p, p+3]` days.
 2. For each day `d` in the window, the background is `b = max(median of the same weekday over -14/-7 days, median over +7/+14 days)`.
    Zeros (the npm API has outages where a day is reported as 0) and days inside other windows are skipped.
-   If both sides are empty, take the median of the non-zero days within ±14 days.
+   If both sides are empty, take the median of days of the same kind (weekdays or weekends) within ±14 days, so that an ordinary
+   weekday is never compared with a weekend. Only if there are none (a young package), take any non-zero day within ±14 days.
 3. A day counts as a spike only if `actual > 2·b` (`SPIKE_FACTOR`). Its value is then replaced with `b`, and the difference is attributed to mirrors and scanners.
 
 Why this and not "the median of the 14 days before publication" (checked on fixtures):
@@ -52,36 +54,44 @@ Why this and not "the median of the 14 days before publication" (checked on fixt
 - `zod` has a weekday/weekend difference of about 2.5×: a plain median cut off every weekday (651M false "mirror" downloads);
 - npm outage days with zeros dragged the background down.
 
-Comparing against the same weekday removes the weekly rhythm. Taking the maximum of "before" and "after" avoids cutting out growth in popularity.
-The 2× threshold lets normal fluctuations through.
+Comparing against the same weekday removes the weekly rhythm. Taking the maximum of "before" and "after" keeps a lasting rise.
+The 2× threshold lets normal fluctuations through. A short burst of real users on release day looks exactly like a mirror spike and
+gets cut, so the upper bound of the range keeps every spike cut in the last 7 days (see step C).
+
+Regression (2026-11): with npm outages on the same weekday one and two weeks back, and no data after the publish yet, the
+old neighbouring-day fallback landed on weekend levels and cut ordinary weekdays: axios showed 21% noise for two days.
 
 ### Step B. Subtract the crawler floor (weekly per-version slice)
 1. `f` = lower percentiles of weekly downloads among versions older than 14 days (fresh ones are still inside the spike window), see item 2.
-2. Weekly organic ≈ `Σ max(0, vᵢ − f) − (downloads cut out in step A over the last 7 days)`.
+2. Weekly real installs ≈ `Σ max(0, vᵢ − f) − (downloads cut out in step A over the last 7 days)`.
    Per-version downloads include the spike of the fresh version, so we subtract it to stay on the cleaned scale.
    The floor for the point estimate is the 10th percentile, for the lower bound the 25th, for the upper bound the minimum.
 3. The ratio `organic_week / cleaned_week` is applied to the cleaned series from step A. This gives the daily estimate.
-   Zero days among the last 7 with a background ≥ 10 are treated as an npm outage: in the ratio's denominator we replace them with the background
+   Zero days among the last 7 (from the first publish on) with a background ≥ 10 are treated as an npm outage: in the ratio's denominator we replace them with the background
    (per-version downloads do count those days), otherwise the ratio gets pinned to 1. The daily series itself is not changed.
 4. If there are fewer than 3 old versions, `f` cannot be estimated. In that case we take the floor `f₀` from the canary calibration (item 5,
    `floorPerVersion`), and if there is none, the global constant 3. The point estimate is `f₀`, the lower bound is `2·f₀`,
    the upper bound is 0. The notes say where the floor came from. If `f` was measured, the calibration is not used.
 
+5. Under two weeks after the first publish (`tooNew`) there is no background to compare with, so a spike can't be told
+   from first users. Confidence is `low`, the page says "too new to tell", and the range reaches the whole week's count.
+
 ### Step C. Confidence
-Base rules:
-- organic < 10 per week → `low`: the noise is comparable to the signal;
-- floor `f` not measured (too few old versions) → `low`;
-- organic ≥ 1000 per week with a measured floor → `high`;
+Confidence is about the noise filter, not about whether downloads come from people.
+
+- filtered < 10 per week, or `tooNew` → `low`: the noise is comparable to the signal;
+- filtered ≥ 1000 per week, floor measured **and** independent evidence → `high`;
+- floor not measured (too few old versions) → `low`, or `medium` with independent evidence or a weekly rhythm;
 - otherwise `medium`.
 
-Upgrade `low → medium` (only when organic ≥ 10 per week, otherwise the estimate is noise):
-- **independent evidence** (item 4): ≥ 5 dependent packages, or ≥ 10 dependent repositories,
-  or ≥ 1000 jsDelivr CDN hits per month;
-- **weekly rhythm**: weekday/weekend ratio ≥ 1.3 (see below).
+**Independent evidence** (item 4): ≥ 5 dependent packages, or ≥ 10 dependent repositories, or ≥ 1000 jsDelivr CDN hits per month.
+**Weekly rhythm**: weekday/weekend ratio ≥ 1.3 (see below). It is weak: CI and weekday releases have it too, and it is easy to fake.
 
-Evidence does not raise confidence to `high` (the `high` rule stays as is) and never lowers confidence:
-absence of data is not a negative signal. Each rule that fires adds a note
-("12 published packages depend on it", "Weekday traffic is 1.8× weekend — human work rhythm").
+Why `high` needs evidence: a steady stream of direct tarball requests to one version passes both filters. Volume, a measured
+floor and a rhythm can all be produced that way, while dependents are harder to fake (not impossible). No evidence means `medium`,
+not lower: absence of data is not a negative signal for a small package. The nightly build checks ecosyste.ms and jsDelivr
+(`fetchConfidenceEvidence`), so static pages and live pages agree. Each rule that fires adds a note. The rhythm is shown only
+at 10 or more real installs a week, since below that it would contradict the number.
 
 **Weekday/weekend ratio** (`signals.weekdayRatio`): the mean of the cleaned series (step A) on weekdays /
 the mean on weekends over the last 8 full Mon-Sun weeks (UTC). `null` if there is less than 4 weeks of data or if
@@ -90,16 +100,19 @@ weekends instead of 0, so the number stays finite. On fixtures: is-thirteen 3.6,
 react and zod 1.2-1.3, the small package 1.3 (but organic 2, so the rule does not fire).
 
 The result is always shown as a **range**, not a single number. We add count noise to the bounds from step B:
-for a point estimate of `n` per week, the lower bound is no higher than `n − ⌈2·√n⌉` and the upper bound is no lower than `n + ⌈2·√max(n, 1)⌉`
-(≈ a 95% Poisson interval, `NOISE_Z = 2`), clamped to `[0, cleaned_week]`. Otherwise, when all old versions
-sit on the same floor, the range collapses to a point. For the small package (`n = 2`) this gives `≈ 0–5 / week`;
-for large packages the band is negligible compared to the volume.
+for a point estimate of `n` per week, the lower bound is no higher than `n − ⌈2·√n⌉` and the upper bound is no lower than `n + ⌈2·√n⌉`
+(≈ a 95% Poisson interval, `NOISE_Z = 2`; for `n = 0` the upper bound is 4, from the exact 3.69), clamped to `[0, cleaned_week]`. Otherwise, when all old versions
+sit on the same floor, the range collapses to a point. The upper bound then adds every spike cut in those 7 days.
+For the small package (`n = 2`) this gives `≈ 0–5 / week`.
+
+The range covers only these sources of error, not CI or other automation. A narrow range is not a sign of accuracy, so large numbers are
+shown rounded to three digits. When noise is under 1% of at least 1M a week, the page shows only that, without a separate best guess.
 
 ## 4. Independent evidence of usage (not downloads)
 
 | Signal | Source | What it means |
 |---|---|---|
-| Dependent packages | `packages.ecosyste.ms`, `api.deps.dev` | Someone published a package that depends on yours |
+| Dependent packages | `packages.ecosyste.ms` | Someone published a package that depends on yours |
 | Dependent repositories | `packages.ecosyste.ms` (`dependent_repos_count`) | Public projects with the package in their manifest |
 | CDN hits | `data.jsdelivr.com/v1/stats/packages/npm/<pkg>` | Use on websites via jsDelivr |
 | GitHub | `api.github.com/repos/...` | Stars, forks and issues from **other** people |
@@ -129,14 +142,16 @@ GitHub stars do not feed into confidence: they indicate interest, not installs.
   (`floorPerVersion`, `updated`, `source`; we do not measure the spike size yet, the model does not use it). The model only reads this file:
   `estimate(data, { calibration })` takes `floorPerVersion` instead of the constant 3 when the package's own floor is not measured (step B.4).
   A reading above 100 per version is treated as implausible and ignored.
-- **Control group.** 20-30 packages with known real usage (our own, popular, dead).
-  We use them to check that the model does not underestimate popular packages or overestimate dead ones.
-- **Weekdays/weekends.** Live developers have a weekly rhythm, bots do not.
-  If a series shows a rhythm, it is an additional argument for organic traffic (implemented, see step C).
-  Caveat: CI also runs on weekdays, so the rhythm only raises `low → medium`, never to `high`.
+- **Control group (planned, not done).** 20-30 packages with known real usage. Today only 8 fixtures guard against regressions,
+  and none has a known audience. Nothing validates the numbers against real user counts yet.
+- **Weekdays/weekends.** Work has a weekly rhythm, while crawlers do not.
+  If a series shows a rhythm, it is a weak argument for real use (implemented, see step C).
+  Caveat: CI and weekday releases have it too, so the rhythm only raises `low → medium`, never to `high`.
 
 ## 6. Known limitations
+- Not validated against real user counts.
+- CI, Docker builds and dependency installs are not removed. For very popular packages they are most of the count, so the model barely changes
+  npm's number, and that number says little about people. Growth can reflect automation too.
 - Private usage is invisible by definition.
-- Inflated counts from direct requests cannot be told apart.
-- The floor `f` of very popular packages gets lost in the noise. For them the model barely changes the number, and that is correct.
+- Inflated counts from direct requests cannot be told apart. Independent evidence limits how much confidence they can get.
 - npm data lags by 1-2 days.

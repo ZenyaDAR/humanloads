@@ -4,6 +4,9 @@ import type { Confidence, DailyEstimate, Estimate, EstimateOptions, Publish, Raw
 // own floor nor canary calibration (opts.calibration) is available.
 export const GLOBAL_FLOOR_PER_VERSION = 3;
 
+// Bump when numbers from older builds must not be carried over (scripts/build-data.mjs).
+export const MODEL_VERSION = 'v2';
+
 const SPIKE_DAYS = 3; // window [p, p+3]
 // Background day offsets relative to a window day.
 const SAME_WEEKDAY_BEFORE = [-14, -7];
@@ -17,6 +20,8 @@ const OLD_VERSION_DAYS = 14;
 // Count noise on the weekly bounds: n ± NOISE_Z·√n is a ~95% Poisson band, so the range never collapses
 // to a single value when all old versions sit on the same floor.
 const NOISE_Z = 2;
+// √0 would give no band at all; the exact 95% Poisson upper bound for a count of 0 is 3.69.
+const ZERO_COUNT_UPPER = 4;
 // ponytail: a zero day among the last 7 is treated as an npm outage only when its background is at least
 // this high; for small packages a real 0 is plausible (Poisson P(0) = e^-b), so it is left alone.
 const OUTAGE_MIN_BACKGROUND = 10;
@@ -31,6 +36,8 @@ const fmt = (n: number) => n.toLocaleString('en-US');
 
 export const addDays = (day: string, n: number): string =>
   new Date(Date.parse(day + 'T00:00:00Z') + n * DAY_MS).toISOString().slice(0, 10);
+
+const isWeekend = (day: string): boolean => [0, 6].includes(new Date(day + 'T00:00:00Z').getUTCDay());
 
 export function median(xs: number[]): number {
   if (!xs.length) return 0;
@@ -67,6 +74,10 @@ function weekdayRatio(days: string[], cleaned: number[]): number | null {
   // A zero weekend mean is treated as one download over the weekends so the ratio stays finite (JSON-safe).
   return Math.round((w / Math.max(e, 1 / we.length)) * 100) / 100;
 }
+
+// Medium only because evidence has not arrived yet: the app shows "checking" here instead of a grade that may flip to high.
+export const awaitingEvidence = (e: Estimate): boolean =>
+  e.confidence === 'medium' && e.lastWeek.organic >= 1000 && e.breakdown.crawlerFloorPerVersion !== null;
 
 export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Estimate {
   const notes: string[] = [];
@@ -108,11 +119,14 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
     // leaves one side high and must not be clipped.
     const before = backgroundValues(day, SAME_WEEKDAY_BEFORE);
     const after = backgroundValues(day, SAME_WEEKDAY_AFTER);
-    // Both sides missing (series end + outage days): any non-zero day within two weeks.
+    // Both sides missing (series end + outage days): days of the same kind within two weeks. Any neighbouring
+    // day would mix in weekend levels and clip an ordinary weekday (axios lost 21% this way). Only a young
+    // package with no such day falls back to any non-zero day.
+    const sameKind = before.length || after.length ? [] : backgroundValues(day, NEAR_OFFSETS.filter((n) => isWeekend(addDays(day, n)) === isWeekend(day)));
     const b =
       before.length || after.length
         ? Math.max(median(before), median(after))
-        : median(backgroundValues(day, NEAR_OFFSETS));
+        : median(sameKind.length ? sameKind : backgroundValues(day, NEAR_OFFSETS));
     if (downloads <= SPIKE_FACTOR * b) return downloads;
     clipped.add(day);
     return Math.round(b);
@@ -124,6 +138,11 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
   // Step B: crawler floor from per-version weekly downloads.
   const lastDay = series.at(-1)?.day;
   const oldCutoff = lastDay ? addDays(lastDay, -OLD_VERSION_DAYS) : '';
+  // With under two weeks of history there is no background to compare a spike with, so the numbers can't tell
+  // noise from first users. Say so instead of reporting "0".
+  const firstPublish = Object.values(publishDay).sort()[0];
+  const tooNew = firstPublish !== undefined && oldCutoff !== '' && firstPublish > oldCutoff;
+  if (tooNew) notes.push(`First published ${firstPublish}: too little history to separate noise from real use`);
   const versionNames = Object.keys(versionsLastWeek);
   const counts = versionNames.map((v) => versionsLastWeek[v] || 0);
   const old = versionNames
@@ -159,6 +178,8 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
   let outageDays = 0;
   const ratioWeek = cleaned.slice(last7).reduce((s, c, i) => {
     if (c > 0) return s + c;
+    // Zeros before the first publish are not outages, and a new package's only background is its own spike.
+    if (tooNew || (firstPublish !== undefined && series[last7 + i].day < firstPublish)) return s;
     const b = median(backgroundValues(series[last7 + i].day, NEAR_OFFSETS));
     if (b < OUTAGE_MIN_BACKGROUND) return s;
     outageDays++;
@@ -171,25 +192,27 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
   if (cleanedWeek > 0) {
     const n = r.point * cleanedWeek;
     const lowWeekly = Math.max(0, Math.min(r.low * cleanedWeek, n - Math.ceil(NOISE_Z * Math.sqrt(n))));
-    const highWeekly = Math.min(
-      cleanedWeek,
-      Math.max(r.high * cleanedWeek, n + Math.ceil(NOISE_Z * Math.sqrt(Math.max(n, 1)))),
-    );
+    const noise = n > 0 ? Math.ceil(NOISE_Z * Math.sqrt(n)) : ZERO_COUNT_UPPER;
+    const highWeekly = Math.min(cleanedWeek, Math.max(r.high * cleanedWeek, n + noise));
     r.low = lowWeekly / cleanedWeek;
     r.high = highWeekly / cleanedWeek;
   }
+  // No background and possibly no per-version counts yet: every download so far could be real, or none.
+  if (tooNew) [r.low, r.high] = [0, 1];
 
   // Cumulative rounding: rounding each day on its own erases small packages (2/week spread over days of
   // 0.3 each rounds to 0 every day). Rounding the running total keeps any window's sum within 1 of exact.
-  const roundedDaily = (k: number) => {
+  const roundedDaily = (value: (cleanedDay: number, i: number) => number) => {
     let acc = 0;
-    return cleaned.map((c) => {
+    return cleaned.map((c, i) => {
       const prev = Math.round(acc);
-      acc += c * k;
+      acc += value(c, i);
       return Math.round(acc) - prev;
     });
   };
-  const [orgD, lowD, highD] = [roundedDaily(r.point), roundedDaily(r.low), roundedDaily(r.high)];
+  const [orgD, lowD] = [roundedDaily((c) => c * r.point), roundedDaily((c) => c * r.low)];
+  // A cut spike may hold real users (a release announcement looks the same), so the upper bound keeps all of it.
+  const highD = roundedDaily((c, i) => c * r.high + series[i].downloads - c);
   const daily: DailyEstimate[] = series.map((d, i) => ({
     day: d.day,
     npm: d.downloads,
@@ -217,18 +240,6 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
   }
 
   // Step C: confidence.
-  let confidence: Confidence = 'medium';
-  if (lastWeek.organic < 10) {
-    confidence = 'low';
-    notes.push(`Under 10 organic installs a week — noise is comparable to the signal`);
-  } else if (crawlerFloorPerVersion === null) {
-    confidence = 'low';
-  } else if (lastWeek.organic >= 1000) {
-    confidence = 'high';
-    notes.push(`Over 1,000 organic installs a week with a measured crawler floor`);
-  }
-  // Evidence and rhythm can only raise low -> medium (never to high, never lower: missing is not negative),
-  // and only when there is enough organic volume for the estimate itself to mean something.
   const ev = opts.evidence;
   const evidenceNotes: string[] = [];
   if (ev) {
@@ -239,11 +250,32 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
     if ((ev.cdnHitsMonth ?? 0) >= EVIDENCE_MIN.cdnHitsMonth)
       evidenceNotes.push(`${fmt(ev.cdnHitsMonth!)} jsDelivr CDN hits last month`);
   }
-  notes.push(...evidenceNotes);
+  const enoughToJudge = lastWeek.organic >= 10;
   const ratioWd = weekdayRatio(series.map((d) => d.day), cleaned);
-  const rhythm = ratioWd !== null && ratioWd >= RHYTHM_RATIO;
-  if (rhythm) notes.push(`Weekday traffic is ${ratioWd!.toFixed(1)}× weekend — human work rhythm`);
-  if (confidence === 'low' && lastWeek.organic >= 10 && (evidenceNotes.length || rhythm)) confidence = 'medium';
+  const rhythm = enoughToJudge && !tooNew && ratioWd !== null && ratioWd >= RHYTHM_RATIO;
+
+  let confidence: Confidence = 'medium';
+  if (tooNew) {
+    confidence = 'low';
+  } else if (!enoughToJudge) {
+    confidence = 'low';
+    notes.push(`Under 10 real installs a week — noise is comparable to the signal`);
+  } else if (crawlerFloorPerVersion === null) {
+    // Rhythm is easy to fake and CI has it too, so it and evidence lift an unmeasured floor to medium at most.
+    confidence = evidenceNotes.length || rhythm ? 'medium' : 'low';
+  } else if (lastWeek.organic >= 1000) {
+    // A steady stream of direct tarball requests passes both filters, so volume alone never earns "high".
+    if (evidenceNotes.length) {
+      confidence = 'high';
+      notes.push(`Over 1,000 real installs a week, a measured crawler floor and independent evidence of use`);
+    } else if (ev) {
+      // "None found" is a claim about every source, so one failed source makes it "unavailable".
+      const checked = ev.dependentPackages !== null && ev.dependentRepos !== null && ev.cdnHitsMonth !== null;
+      notes.push(checked ? `No independent evidence of use found, so confidence stops at medium` : `Independent evidence is unavailable, so confidence stops at medium`);
+    }
+  }
+  notes.push(...evidenceNotes);
+  if (rhythm) notes.push(`Weekday traffic is ${ratioWd!.toFixed(1)}× weekend. That fits work hours, but CI and weekday releases look the same`);
 
   const versions: VersionRow[] = versionNames
     .map((v) => {
@@ -253,7 +285,8 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
     .sort((a, b) => publishedAt(b.version).localeCompare(publishedAt(a.version)));
 
   return {
-    model: 'v1',
+    model: MODEL_VERSION,
+    tooNew,
     daily,
     publishes,
     lastWeek,

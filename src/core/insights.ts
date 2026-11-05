@@ -1,18 +1,20 @@
 // Per-package facts in plain sentences ("Is X still maintained / used?"), so each page says something only it
 // can say. Shared by the SPA and the prerender script: computed from the data both already fetch, no extra calls.
 import { addDays, median } from './estimate.ts';
-import { esc } from './html.ts';
-import type { Estimate, RawPackageData } from './types.ts';
+import { clip, esc, roundCount } from './html.ts';
+import type { ChainStep, Estimate, MarketGrowth, RawPackageData } from './types.ts';
 
 export interface PackageFacts {
   asOf: string; // last day of the download series; "how long ago" is measured from here, so builds are reproducible
   firstPublished?: string;
   lastRelease?: { version: string; day: string };
+  lastPublish?: string; // any version, prereleases and backports too: each one brings its own spike
   stableReleasesYear: number;
   prereleasesYear: number;
   medianGapDays: number | null; // between days with a stable release, last 12 months
   maintainers?: number;
   deprecated?: string;
+  maintenanceNote?: string;
   growth3m: number | null; // 0.12 = up 12%
   growth11m: number | null;
   adoption: { major: string; isLatest: boolean; share: number; topVersion: string; topShare: number } | null;
@@ -90,15 +92,18 @@ export function packageFacts(data: RawPackageData, est: Estimate): PackageFacts 
     asOf,
     ...(created && { firstPublished: created }),
     ...(lastRelease && { lastRelease }),
+    ...(published.length && { lastPublish: published.at(-1)!.day }),
     stableReleasesYear: stable.length,
     prereleasesYear: thisYear.length - stable.length,
     medianGapDays: gaps.length >= 2 ? Math.round(median(gaps)) : null,
     ...(reg.maintainerCount !== undefined && { maintainers: reg.maintainerCount }),
-    ...(reg.deprecated && { deprecated: reg.deprecated.slice(0, DEPRECATED_MAX) }),
+    ...(reg.deprecated && { deprecated: clip(reg.deprecated, DEPRECATED_MAX) }),
+    ...(reg.maintenanceNote && { maintenanceNote: reg.maintenanceNote }),
     growth3m: growth(est, 13, created),
     growth11m: growth(est, 48, created),
     adoption: adoption(est, latest),
-    weekdayRatio: est.signals?.weekdayRatio ?? null,
+    // Below 10 a week the estimate itself is noise, and a rhythm would contradict it (weekday releases cause one).
+    weekdayRatio: est.lastWeek.organic >= 10 && !est.tooNew ? (est.signals?.weekdayRatio ?? null) : null,
     mirrorsYear: est.breakdown.mirrorsTotal,
     crawlersWeekly: est.breakdown.crawlersWeekly,
     crawlerFloor: est.breakdown.crawlerFloorPerVersion,
@@ -116,6 +121,8 @@ function maintainedText(f: PackageFacts): string {
   const out: string[] = [];
   const age = f.lastRelease ? daysBetween(f.lastRelease.day, f.asOf) : null;
   if (f.deprecated) out.push(`No: the latest version is marked deprecated on npm, with the message “${f.deprecated}”.`);
+  // The project's own words beat anything release dates suggest: a project in maintenance mode still ships fixes.
+  else if (f.maintenanceNote) out.push(`Only partly, by its own account. Its README says: “${f.maintenanceNote}”`);
   else if (age !== null && age <= 180) out.push('Most likely yes, going by its releases.');
   else if (age !== null && age <= 365) out.push('Less clear: the last release is more than six months old.');
   else if (age !== null) out.push('Probably not actively: there has been no release in over a year, though that can also mean it is simply finished.');
@@ -133,7 +140,20 @@ function maintainedText(f: PackageFacts): string {
   return out.join(' ');
 }
 
-function usedText(f: PackageFacts): string {
+const MARKET_MIN_PACKAGES = 30;
+const MARKET_SAME = 0.1; // closer than this to the median isn't a difference worth a sentence
+export const MARKET_MIN_WEEKLY = 1000; // for the median and for comparing with it: small counts swing wildly
+
+// npm's counts rise across the board, so "up 40%" alone can hide a package losing ground. The median is no verdict on
+// health: the catalog leans towards what is most downloaded today, which the sentence says.
+function marketText(f: PackageFacts, m: MarketGrowth | null | undefined, weekly: number): string {
+  if (!m || m.growth11m === null || m.packages < MARKET_MIN_PACKAGES || f.growth11m === null || weekly < MARKET_MIN_WEEKLY) return '';
+  const gap = f.growth11m - m.growth11m;
+  const place = Math.abs(gap) < MARKET_SAME ? 'about level with that' : gap < 0 ? 'behind that' : 'ahead of that';
+  return `For scale, the median of the ${num(m.packages)} packages we track, which lean towards today's most downloaded, is ${trend(m.growth11m)} over 11 months, so this one is ${place}.`;
+}
+
+function usedText(f: PackageFacts, market: MarketGrowth | null | undefined, weekly: number): string {
   const out: string[] = [];
   const changes = [
     f.growth3m !== null && `${trend(f.growth3m)} over 3 months`,
@@ -141,6 +161,8 @@ function usedText(f: PackageFacts): string {
   ].filter(Boolean);
   // Humans per day are npm's spike-free curve times one ratio, so this must not read as a change in the bot share.
   if (changes.length) out.push(`Downloads with publish spikes removed are ${changes.join(' and ')}.`);
+  const scale = marketText(f, market, weekly);
+  if (scale) out.push(scale);
   if (f.adoption) {
     const a = f.adoption;
     out.push(
@@ -162,9 +184,38 @@ function usedText(f: PackageFacts): string {
   return out.join(' ');
 }
 
-export function factsHtml(name: string, f: PackageFacts): string {
+// One line under the number cards: which versions are in use says more than the total, especially at scale.
+export function adoptionHtml(f: PackageFacts | undefined): string {
+  const a = f?.adoption;
+  // Nearly everything on the latest major says nothing worth a line this high up the page.
+  if (!a || (a.isLatest && a.share >= 0.95)) return '';
+  return `<p class="adoption">Most used major version: <strong class="num">${esc(a.major)}</strong>${
+    a.isLatest ? ', the latest one' : ', <strong>not the latest one</strong>'
+  }, with <strong class="num">${pct(a.share)}</strong> of last week's downloads above the crawler floor. Most used single version: ${esc(a.topVersion)}.</p>`;
+}
+
+// The trail of a package most of whose downloads seem to arrive through one other package. An ordered list, top to bottom.
+export const chainListHtml = (steps: ChainStep[], base: string): string =>
+  `<ol class="chain">${steps
+    .map((s) => `<li><a href="${esc(base + s.name)}">${esc(s.name)}</a>${s.version ? ` <span class="chain-ver">${esc(s.version)}</span>` : ''} <span class="chain-n">${roundCount(s.weekly)} a week</span></li>`)
+    .join('')}</ol>`;
+
+export const CHAIN_GUIDE_PATH = 'docs/why-is-number-has-so-many-downloads';
+
+export function chainHtml(name: string, steps: ChainStep[] | undefined, base: string): string {
+  if (!steps || steps.length < 2) return '';
   const n = esc(name);
-  const used = usedText(f);
+  return `<section class="insights">
+        <h2 class="section-title">Where do the downloads of ${n} come from?</h2>
+        <p>Probably mostly through other packages. Each package below requires the one above it, and their weekly downloads on the matching versions line up within about 30%. This is an inference from download counts, not something npm records.</p>
+        ${chainListHtml(steps, base)}
+        <p>Past ${esc(steps.at(-1)!.name)} the trail splits or we can't follow it. These are still real installs, but the people running them may never have chosen ${n}. <a href="${esc(base + CHAIN_GUIDE_PATH)}">How a package ends up like this</a>.</p>
+      </section>`;
+}
+
+export function factsHtml(name: string, f: PackageFacts, market?: MarketGrowth | null, npmWeekly = 0): string {
+  const n = esc(name);
+  const used = usedText(f, market, npmWeekly);
   return `<section class="insights">
         <h2 class="section-title">Is ${n} still maintained?</h2>
         <p>${esc(maintainedText(f))}</p>

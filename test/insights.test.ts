@@ -59,7 +59,7 @@ test('facts text: a flat week does not claim bots, it would contradict the estim
 });
 
 test('titles stay within 70 characters for long scoped names', () => {
-  assert.equal(packageTitle('zod'), 'zod npm downloads vs real human installs · humanloads');
+  assert.equal(packageTitle('zod'), 'zod npm downloads: weekly stats and real installs · humanloads');
   assert.ok(packageTitle('@abhash-chakraborty/inyon-linux-arm64').length <= 70);
 });
 
@@ -115,7 +115,7 @@ const row = (organicWeekly: number, facts?: PackageFacts): FeaturedRow => ({
   name: 'p', npmWeekly: organicWeekly * 2, organicWeekly, low: organicWeekly, high: organicWeekly, inflation: 0.5, confidence: 'high', ...(facts && { facts }),
 });
 
-test('indexing: pages under 1,000 estimated humans a week, or without numbers, are noindex', () => {
+test('indexing: pages under 1,000 real installs a week, or without numbers, are noindex', () => {
   assert.equal(isIndexable(undefined), false);
   assert.equal(isIndexable({ organicWeekly: 999 }), false);
   assert.equal(isIndexable({ organicWeekly: 1000 }), true);

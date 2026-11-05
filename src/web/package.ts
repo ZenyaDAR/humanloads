@@ -1,10 +1,10 @@
-import { estimate } from '../core/estimate.ts';
+import { awaitingEvidence, estimate } from '../core/estimate.ts';
 import { fetchEvidence, fetchPackageData } from '../core/sources.ts';
 import {
-  PackageNotFoundError, type Calibration, type Estimate, type Evidence, type RawPackageData, type RegistryDoc,
+  PackageNotFoundError, type Calibration, type Estimate, type Evidence, type InsightsFile, type RawPackageData, type RegistryDoc,
 } from '../core/types.ts';
-import { factsHtml, packageFacts } from '../core/insights.ts';
-import { REPO_URL } from '../core/seo.ts';
+import { adoptionHtml, chainHtml, factsHtml, packageFacts } from '../core/insights.ts';
+import { REPO_URL, peopleAnswerHtml, deprecatedHtml, numberCardsHtml } from '../core/seo.ts';
 import { mountChart } from './chart.ts';
 import { searchBox } from './home.ts';
 import {
@@ -68,7 +68,7 @@ function paint(view: HTMLElement, html: string): void {
 async function load(view: HTMLElement, name: string, force: boolean): Promise<void> {
   try {
     if (force || !readCache(name)) paint(view, skeleton(name));
-    const [data, cal] = await Promise.all([getData(name, force), calibration()]);
+    const [data, cal, insights] = await Promise.all([getData(name, force), calibration(), fetchStatic<InsightsFile>('data/insights.json')]);
     if (!view.isConnected) return; // user navigated away while we were fetching
 
     const est = estimate(data, { calibration: cal });
@@ -78,9 +78,9 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
       `
     <article class="pkg">
       ${header(data.registry, name)}
-      ${total === 0 ? zero(name) : body(est, name, data)}
+      ${total === 0 ? zero(name) : body(est, name, data, insights)}
       <section class="evidence" aria-busy="true" aria-labelledby="ev-title">
-        <h2 class="section-title" id="ev-title">Who actually uses it</h2>
+        <h2 class="section-title" id="ev-title">Independent evidence of use</h2>
         <p class="evidence-lede hand">checking dependents, CDN and GitHub…</p>
       </section>
       <div class="tools">
@@ -88,7 +88,7 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
         <section class="badge-box" hidden></section>
       </div>
       ${compareLinksHtml(BASE, COMPARE_PAIRS.filter((p) => p.includes(name)), esc, `Compare ${name}`)}
-      <p class="method"><a href="${METHODOLOGY_URL}">How we estimate this <span aria-hidden="true">→</span></a></p>
+      <p class="method"><a href="${METHODOLOGY_URL}">How we filter this <span aria-hidden="true">→</span></a></p>
     </article>`,
     );
     view.querySelector('.compare-with')!.append(
@@ -117,8 +117,14 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
       if (!view.isConnected) return;
       fillEvidence(evHost, ev);
       const cardsEl = view.querySelector('.cards');
-      if (cardsEl) cardsEl.outerHTML = cards(estimate(data, { calibration: cal, evidence: ev }));
+      if (cardsEl) {
+        const open = cardsEl.querySelector<HTMLDetailsElement>('.why')?.open; // keep the disclosure as the reader left it
+        cardsEl.outerHTML = cards(estimate(data, { calibration: cal, evidence: ev }));
+        if (open) view.querySelector<HTMLDetailsElement>('.why')!.open = true;
+      }
     } catch {
+      const cardsEl = view.querySelector('.cards');
+      if (cardsEl) cardsEl.outerHTML = cards(est); // nothing more is coming, so stop saying "checking"
       evHost.removeAttribute('aria-busy');
       const lede = evHost.querySelector('.evidence-lede');
       if (lede) {
@@ -184,6 +190,7 @@ function header(reg: RegistryDoc, name: string): string {
       <h1 tabindex="-1"><span class="pkg-name">${esc(name)}</span>${version ? ` <span class="pkg-ver">v${esc(version)}</span>` : ''}</h1>
       ${reg.description ? `<p class="pkg-desc">${esc(reg.description)}</p>` : ''}
       <ul class="pkg-links">${links.join('')}</ul>
+      ${reg.deprecated ? deprecatedHtml(reg.deprecated) : ''}
     </header>`;
 }
 
@@ -195,11 +202,12 @@ function zero(name: string): string {
     </section>`;
 }
 
-function body(est: Estimate, name: string, data: RawPackageData): string {
+function body(est: Estimate, name: string, data: RawPackageData, insights: InsightsFile | null): string {
   const lastDay = est.daily[est.daily.length - 1]?.day;
   const facts = packageFacts(data, est);
   return `
-    ${cards(est)}
+    ${cards(est, awaitingEvidence(est))}
+    ${adoptionHtml(facts)}
     ${lastDay ? `<p class="fineprint">Last 7 days of npm data, through ${esc(lastDay)}. npm publishes counts 1–2 days late.</p>` : ''}
 
     <figure class="chart-fig">
@@ -207,42 +215,30 @@ function body(est: Estimate, name: string, data: RawPackageData): string {
         <h2 class="section-title">Twelve months, week by week</h2>
         <ul class="legend">
           <li><span class="key key-npm" aria-hidden="true"></span>npm downloads</li>
-          <li><span class="key key-human" aria-hidden="true"></span>estimated humans</li>
+          <li><span class="key key-human" aria-hidden="true"></span>real installs</li>
           <li><span class="key key-band" aria-hidden="true"></span>likely range</li>
           <li><span class="key key-note" aria-hidden="true">v1</span>new version published</li>
         </ul>
       </figcaption>
       <div class="chart"></div>
-      <p class="fineprint">The vertical scale is square-root, so small numbers stay visible next to big spikes.</p>
+      <p class="fineprint">The vertical scale is square-root, so small numbers stay visible next to big spikes. Real installs in past weeks are this week's share applied to the spike-free count, not separate measurements.</p>
     </figure>
 
-    ${facts ? factsHtml(name, facts) : ''}
+    ${peopleAnswerHtml(name, { npm: est.lastWeek.npm, organic: est.lastWeek.organic, low: est.lastWeek.low, high: est.lastWeek.high, confidence: est.confidence, tooNew: est.tooNew })}
+    ${facts ? factsHtml(name, facts, insights?.market, est.lastWeek.npm) : ''}
+    ${chainHtml(name, insights?.chains[name], BASE)}
     ${breakdown(est)}
     ${versions(est, name)}`;
 }
 
 // The two number cards. Re-rendered on its own once evidence arrives (confidence and notes may change).
-function cards(est: Estimate): string {
+function cards(est: Estimate, checking = false): string {
   const w = est.lastWeek;
-  const low = Math.round(w.low);
-  const high = Math.round(w.high);
-  const range = low === high ? fmt(low) : `${fmt(low)}–${fmt(high)}`;
-  return `
-    <section class="cards" aria-label="Downloads in the last 7 days">
-      <div class="card card-npm">
-        <h2 class="card-label">npm says</h2>
-        <p class="card-big"><s class="struck">${fmt(w.npm)}</s><span class="per"> / week</span></p>
-        <p class="card-sub">Every tarball fetch: mirrors, scanners, CI and people.</p>
-      </div>
-      <div class="card card-human">
-        <h2 class="card-label">probably humans</h2>
-        <p class="card-big">≈ <mark>${range}</mark><span class="per"> / week</span></p>
-        <p class="card-point">best guess <strong>${fmt(w.organic)}</strong>
-          <span class="pill pill-${est.confidence}">${est.confidence} confidence</span></p>
-        ${est.notes.length ? `<ul class="notes">${est.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
-        ${rhythm(est)}
-      </div>
-    </section>`;
+  const notes = est.notes.length ? `<ul class="notes">${est.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : '';
+  return numberCardsHtml(
+    { npm: w.npm, organic: w.organic, low: w.low, high: w.high, confidence: est.confidence, tooNew: est.tooNew, checking },
+    notes + rhythm(est),
+  );
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -251,7 +247,8 @@ const JITTER = [0.6, -0.4, 0.3, -0.7, 0.5, -0.3, 0.4]; // fixed wobble: the draw
 // Mon..Sun average of the cleaned series over the last 8 weeks, as a tiny hand-drawn bar chart.
 function rhythm(est: Estimate): string {
   const ratio = est.signals?.weekdayRatio;
-  if (ratio == null) return '';
+  // Same cutoff as the notes in estimate.ts: below it the filtered count is noise, so a rhythm would contradict it.
+  if (ratio == null || est.tooNew || est.lastWeek.organic < 10) return '';
   const sums = Array<number>(7).fill(0);
   const counts = Array<number>(7).fill(0);
   for (const d of est.daily.slice(-56)) {
@@ -301,14 +298,14 @@ function fillEvidence(host: HTMLElement, ev: Evidence): void {
   const top = (ev.topDependents ?? []).slice(0, 12);
   host.removeAttribute('aria-busy');
   host.innerHTML = `
-    <h2 class="section-title" id="ev-title">Who actually uses it</h2>
-    <p class="evidence-lede">Robots inflate download counts. These numbers are much harder to fake.</p>
+    <h2 class="section-title" id="ev-title">Independent evidence of use</h2>
+    <p class="evidence-lede">Download counts are easy to inflate. These numbers are harder to fake.</p>
     <dl class="ev-grid">
       ${stats.map(([dt, dd, sub]) => `<div class="ev"><dt>${dt}</dt><dd>${dd}</dd><dd class="ev-sub">${sub}</dd></div>`).join('')}
     </dl>
     ${
       top.length
-        ? `<p class="ev-top-title hand">biggest dependents</p>
+        ? `<p class="ev-top-title hand">some packages that depend on it</p>
            <ul class="ev-top">${top
              .map(
                (d) =>
@@ -337,7 +334,7 @@ async function badge(host: HTMLElement, name: string): Promise<void> {
   }
   const json = `${SITE_URL}badges/${safeName(name)}.json`;
   const img = `https://img.shields.io/endpoint?url=${encodeURIComponent(json)}`;
-  const md = `[![humans per week](${img})](${SITE_URL}${name})`;
+  const md = `[![real installs per week](${img})](${SITE_URL}${name})`;
   // The preview is drawn from our own badge JSON (the same file shields.io reads), so it shows
   // the real numbers even before a deploy and costs no third-party request.
   const data = await fetchStatic<{ label: string; message: string; color: string }>(`badges/${safeName(name)}.json`);
@@ -384,12 +381,12 @@ function breakdown(est: Estimate): string {
   const parts = [
     { key: 'mirrors', label: 'mirrors & scanners', value: mirrors, extra: 'spikes right after each publish' },
     { key: 'crawlers', label: 'crawlers', value: crawlers, extra: `about ${fmt(b.crawlersWeekly)} / week` },
-    { key: 'humans', label: 'humans', value: humans, extra: `about ${fmt(b.organicWeekly)} / week` },
+    { key: 'humans', label: 'CI, dependency installs and people', value: humans, extra: `about ${fmt(b.organicWeekly)} / week` },
   ];
   return `
     <section class="breakdown">
       <h2 class="section-title">Where the downloads went</h2>
-      <p class="breakdown-lede">All ${fmt(Math.round(total))} npm downloads of the last 12 months, sorted by who most likely made them.</p>
+      <p class="breakdown-lede">All ${fmt(Math.round(total))} npm downloads of the last 12 months, sorted by what most likely made them. Crawlers and real installs use this week's split for the whole year, so treat them as a rough guide.</p>
       <div class="bar" aria-hidden="true">
         ${parts
           .filter((p) => p.value > 0)
@@ -416,7 +413,7 @@ function versions(est: Estimate, name: string): string {
   const floorText =
     f === null
       ? `Too few versions to measure the crawler floor for ${esc(name)}, so a global estimate is used.`
-      : `Crawler floor: <strong class="num">${fmt(f)}</strong> fetches per version per week. Robots download every version about this often, used or not. Only what sits above the dashed line looks human.`;
+      : `Crawler floor: <strong class="num">${fmt(f)}</strong> fetches per version per week. Robots download every version about this often, used or not. Only what sits above the dashed line is left after filtering.`;
   return `
     <section class="versions">
       <h2 class="section-title">By version, last 7 days</h2>

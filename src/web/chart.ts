@@ -81,7 +81,7 @@ function draw(all: Week[][], colors: string[], width: number, animate: boolean):
   const iw = width - m.l - m.r;
   const ih = H - m.t - m.b;
   const max = Math.max(1, ...all.flat().map((w) => Math.max(w.npm, w.high)));
-  // ponytail: sqrt scale so a 2/week human line stays visible next to 500-fetch mirror spikes; ticks keep it honest.
+  // ponytail: sqrt scale so a 2/week filtered line stays visible next to 500-fetch mirror spikes; ticks keep it honest.
   const y = (v: number) => m.t + ih - Math.sqrt(Math.max(0, v) / max) * ih;
   const x = (i: number) => m.l + (i / (weeks.length - 1)) * iw;
 
@@ -185,13 +185,13 @@ export function mountChart(host: HTMLElement, series: Series[]): void {
     host.setAttribute(
       'aria-label',
       `Chart of weekly downloads over the last ${weeks.length} weeks. npm counted ${fmt(sum('npm'))} downloads; ` +
-        `estimated human installs ${fmt(sum('organic'))} (range ${fmt(sum('low'))} to ${fmt(sum('high'))}). ` +
+        `real installs ${fmt(sum('organic'))} (range ${fmt(sum('low'))} to ${fmt(sum('high'))}). ` +
         `Peak npm week: ${fmt(Math.max(...weeks.map((w) => w.npm)))}.`,
     );
   } else {
     const parts = series.map((s, k) => {
       const ws = all[k];
-      return `${s.label}: npm ${fmt(ws.reduce((t, w) => t + w.npm, 0))}, humans about ${fmt(ws.reduce((t, w) => t + w.organic, 0))}`;
+      return `${s.label}: npm ${fmt(ws.reduce((t, w) => t + w.npm, 0))}, real installs about ${fmt(ws.reduce((t, w) => t + w.organic, 0))}`;
     });
     host.setAttribute('aria-label', `Weekly downloads over the last ${n} weeks. ${parts.join('; ')}. The table below has the numbers.`);
   }

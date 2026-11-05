@@ -18,6 +18,7 @@ export interface RegistryDoc {
   time: Record<string, unknown>; // version -> ISO date, plus "created" / "modified"; unpublished docs hold objects
   maintainerCount?: number; // just the count: the registry's list also carries email addresses
   deprecated?: string; // the latest version's deprecation message
+  maintenanceNote?: string; // the README's own sentence saying the project is in maintenance mode or unmaintained
 }
 
 export interface RawPackageData {
@@ -25,6 +26,14 @@ export interface RawPackageData {
   downloads: DailyDownloads[]; // oldest first, ~365 days, from api.npmjs.org range
   registry: RegistryDoc;
   versionsLastWeek: Record<string, number>; // api.npmjs.org/versions/<pkg>/last-week -> .downloads
+  pulls?: Record<string, DependencyPull>; // required dependencies with enough downloads behind them; used by the nightly build
+}
+
+// How many of last week's downloads of a package came on versions that require a given dependency.
+export interface DependencyPull {
+  weekly: number; // all versions requiring it, whatever the range
+  range: string; // the most downloaded range
+  rangeWeekly: number; // downloads of the versions asking for that range
 }
 
 export interface Publish {
@@ -36,7 +45,7 @@ export interface DailyEstimate {
   day: string;
   npm: number; // raw npm count
   cleaned: number; // after removing publish spikes (step A)
-  organic: number; // point estimate of human installs
+  organic: number; // point estimate of real installs: what is left after mirror spikes and the crawler floor
   low: number;
   high: number;
 }
@@ -50,7 +59,8 @@ export interface VersionRow {
 }
 
 export interface Estimate {
-  model: 'v1';
+  model: string;
+  tooNew: boolean; // under two weeks since the first publish: noise and first users can't be told apart
   daily: DailyEstimate[]; // same days as input, oldest first
   publishes: Publish[];
   lastWeek: { npm: number; organic: number; low: number; high: number }; // last 7 days of the series
@@ -114,14 +124,45 @@ export interface FeaturedRow {
   organicWeekly: number;
   low: number;
   high: number;
-  inflation: number; // 1 - organicWeekly / npmWeekly, 0..1
+  inflation: number; // noise share: 1 - organicWeekly / npmWeekly, 0..1
   confidence: Confidence;
+  tooNew?: boolean; // see Estimate.tooNew
+  updated?: string; // ISO date of the build that fetched this row; rows are refreshed in rotation
   facts?: PackageFacts;
+  pulls?: Record<string, DependencyPull>;
+}
+
+// One step of a dependency trail: this version's weekly downloads line up with the next package, which requires it.
+export interface ChainStep {
+  name: string;
+  version?: string; // its most used version; the last step of a trail may not have a clear one
+  weekly: number; // npm's count, all versions
+}
+
+export interface DeprecatedRow {
+  name: string;
+  npmWeekly: number;
+  message: string; // the maintainers' words
+  lastRelease?: string; // YYYY-MM-DD
+}
+
+export interface MarketGrowth {
+  growth11m: number | null; // median across the catalog
+  packages: number;
+}
+
+// Derived from the catalog each night -> public/data/insights.json, for package pages and guides.
+export interface InsightsFile {
+  generated: string;
+  market: MarketGrowth;
+  deprecated: DeprecatedRow[];
+  chains: Record<string, ChainStep[]>;
 }
 export interface FeaturedFile {
   generated: string; // ISO date
-  humans: FeaturedRow[]; // most real human installs
-  inflated: FeaturedRow[]; // most bot-inflated (among packages with noticeable npm counts)
+  examples: string[]; // well-known names for the "try one" links
+  popular: string[]; // biggest packages in the catalog, as plain links
+  noisiest: FeaturedRow[]; // most noise in npm's count, among packages not in a release window
 }
 
 // shields.io endpoint badge -> public/badges/<safe-name>.json

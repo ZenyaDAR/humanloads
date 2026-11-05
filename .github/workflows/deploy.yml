@@ -39,6 +39,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90 # a stuck API must not hold the runner for the 6-hour default
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -50,17 +51,19 @@ jobs:
 
       # Live data (~150 packages, several minutes) is fetched at most once a day (UTC). Pushes reuse today's
       # cached copy; the nightly schedule, a manual "refresh" run, or the first build of a day fetch it.
-      - id: day
-        run: echo "today=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      # The key hashes the code and lists that shape the data, so a build never prerenders numbers from another model
+      # or format, and a new blocklist entry refetches instead of shipping today's files with the name still in them.
+      - id: data
+        run: echo "key=data-$(date -u +%F)-${{ hashFiles('src/core/estimate.ts', 'src/core/insights.ts', 'src/core/sources.ts', 'scripts/build-data.mjs', 'scripts/data-lib.ts', 'data/seeds.json', 'data/blocklist.json') }}" >> "$GITHUB_OUTPUT"
       - id: cache
         uses: actions/cache/restore@v6
         with:
           path: |
             public/data
             public/badges
-          key: data-${{ steps.day.outputs.today }}-${{ github.run_id }}
+          key: ${{ steps.data.outputs.key }}-${{ github.run_id }}
           restore-keys: |
-            data-${{ steps.day.outputs.today }}-
+            ${{ steps.data.outputs.key }}-
       - id: fetch
         if: >-
           github.event_name != 'pull_request' &&
@@ -72,7 +75,7 @@ jobs:
           path: |
             public/data
             public/badges
-          key: data-${{ steps.day.outputs.today }}-${{ github.run_id }}
+          key: ${{ steps.data.outputs.key }}-${{ github.run_id }}
 
       - run: npm run build
       - if: github.event_name != 'pull_request'

@@ -1,5 +1,5 @@
 name: Estimate looks wrong
-description: The human-install estimate for a package seems too high or too low.
+description: The real-installs number for a package seems too high or too low.
 labels: [estimate]
 body:
   - type: input

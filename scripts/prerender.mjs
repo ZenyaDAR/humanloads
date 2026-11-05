@@ -11,9 +11,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isValidPackageName } from '../src/core/sources.ts';
 import { customDomain, resolveSiteUrl } from '../site.config.ts';
 import { METHODOLOGY_PATH } from '../src/core/methodology.ts';
+import { GUIDES } from '../src/core/guides.ts';
 import { comparePath, isIndexable } from '../src/core/seo.ts';
 import {
-  compareHtml, homeHtml, llmsTxt, methodologyHtml, notFoundHtml, prerenderHtml, robotsTxt, sitemapXml,
+  compareHtml, guideHtml, homeHtml, llmsTxt, methodologyHtml, notFoundHtml, prerenderHtml, robotsTxt, sitemapXml,
 } from './data-lib.ts';
 
 const SITE = resolveSiteUrl();
@@ -26,6 +27,7 @@ const shell = await readFile(new URL('index.html', dist), 'utf8');
 const tracked = JSON.parse(await readFile(new URL('../data/tracked.json', import.meta.url), 'utf8'));
 const summary = await readJson(new URL('data/summary.json', dist));
 const featured = await readJson(new URL('data/featured.json', dist));
+const insights = await readJson(new URL('data/insights.json', dist));
 const packages = summary?.packages ?? {};
 const allPairs = JSON.parse(await readFile(new URL('../data/compare.json', import.meta.url), 'utf8'))
   .filter((p) => p.length >= 2 && p.length <= 3 && p.every(isValidPackageName));
@@ -37,6 +39,7 @@ await writeFile(new URL('index.html', dist), homeHtml(shell, SITE, featured, pai
 // Written before the package pages, so a package named "docs" is skipped as a clash below.
 await mkdir(new URL('docs/', dist), { recursive: true });
 await writeFile(new URL(`${METHODOLOGY_PATH}.html`, dist), methodologyHtml(shell, SITE));
+for (const guide of GUIDES) await writeFile(new URL(`${guide.path}.html`, dist), guideHtml(shell, SITE, guide, insights));
 
 // Also before the package pages: a package named "compare" would clash with this folder.
 for (const [i, p] of pairs.entries()) {
@@ -48,7 +51,8 @@ for (const [i, p] of pairs.entries()) {
 }
 
 // Biggest first: the sitemap, llms.txt and the "Other packages" links read in that order.
-const names = [...new Set([...tracked, ...Object.keys(packages)])]
+// `pending` names keep their page with generic text until this model has numbers for them; isIndexable keeps it out of indexes.
+const names = [...new Set([...tracked, ...Object.keys(packages), ...(summary?.pending ?? [])])]
   .filter((name) => {
     if (!isValidPackageName(name)) return false; // never let a name escape dist/
     // A name that matches a built file or folder (data, badges, assets, og.png...) can't get a page.
@@ -66,15 +70,16 @@ for (const name of names) {
   const i = indexable.indexOf(name);
   const related = Array.from({ length: Math.min(RELATED, indexable.length - (i < 0 ? 0 : 1)) }, (_, k) => indexable[(i + 1 + k) % indexable.length]);
   const comparisons = pairs.filter((p) => p.includes(name));
-  const html = prerenderHtml(shell, name, packages[name], SITE, { generated: summary?.generated, related, comparisons });
+  const html = prerenderHtml(shell, name, packages[name], SITE, { generated: packages[name]?.updated ?? summary?.generated, related, comparisons, insights });
   const file = new URL(`${name}.html`, dist);
   await mkdir(new URL('.', file), { recursive: true });
   await writeFile(file, html);
 }
 
 await writeFile(new URL('sitemap.xml', dist), sitemapXml(
-    [SITE, SITE + METHODOLOGY_PATH, ...pairs.map((p) => SITE + comparePath(p)), ...indexable.map((n) => SITE + n)],
+    [SITE, SITE + METHODOLOGY_PATH, ...GUIDES.filter((g) => !g.ready || g.ready(insights)).map((g) => SITE + g.path), ...pairs.map((p) => SITE + comparePath(p)), ...indexable.map((n) => SITE + n)],
     summary?.generated,
+    Object.fromEntries(indexable.map((n) => [SITE + n, packages[n]?.updated])),
   ));
 await writeFile(new URL('robots.txt', dist), robotsTxt(SITE));
 await writeFile(

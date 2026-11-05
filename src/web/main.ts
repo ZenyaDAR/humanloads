@@ -7,13 +7,16 @@ import {
   HOME_DESCRIPTION, HOME_TITLE, compareDescription, compareTitle, packageDescription, packageTitle,
 } from '../core/seo.ts';
 import { METHODOLOGY_DESCRIPTION, METHODOLOGY_PATH, METHODOLOGY_TITLE, methodologyBody } from '../core/methodology.ts';
-import type { FeaturedRow } from '../core/types.ts';
+import { GUIDES, type Guide } from '../core/guides.ts';
+import type { InsightsFile } from '../core/types.ts';
 import { BASE, esc, fetchStatic, navigate, setPageMeta } from './util.ts';
 
 const app = document.getElementById('app')!;
-let routeId = 0;
+// A prerendered landing page already has a body and a description quoting its numbers; 404.html and the dev server's
+// shell have an empty #app. Later routes get the generic text: only crawlers read it, and they land on pages directly.
+let landedOnStaticPage = app.childElementCount > 0;
 
-type Route = { kind: 'home' } | { kind: 'methodology' } | { kind: 'package'; name: string } | { kind: 'compare'; names: string[] } | { kind: 'missing' };
+type Route = { kind: 'home' } | { kind: 'methodology' } | { kind: 'guide'; guide: Guide } | { kind: 'package'; name: string } | { kind: 'compare'; names: string[] } | { kind: 'missing' };
 
 // pathname minus base: "" -> home, "<name>" or "@scope/<name>" -> package page,
 // "compare/a,b[,c]" -> compare. A comma is never valid in a package name, so a bare "compare" stays a package.
@@ -29,6 +32,8 @@ function routeFromPath(pathname: string): Route {
   rest = rest.slice(BASE.length).replace(/\/+$/, '');
   if (rest === '' || rest === 'index.html') return { kind: 'home' };
   if (rest === METHODOLOGY_PATH) return { kind: 'methodology' };
+  const guide = GUIDES.find((g) => g.path === rest);
+  if (guide) return { kind: 'guide', guide };
   if (rest.startsWith('compare/')) {
     const names = [...new Set(rest.slice('compare/'.length).split(',').map((n) => n.trim()))];
     const ok = names.length >= 2 && names.length <= 3 && names.every(isValidPackageName);
@@ -38,13 +43,19 @@ function routeFromPath(pathname: string): Route {
 }
 
 function route(userNavigation: boolean): void {
+  const r = routeFromPath(location.pathname);
+  // A prerendered guide already has its content and its links work through the handler below. Only the header is a
+  // stand-in, with an inert search box and theme toggle.
+  if (landedOnStaticPage && r.kind === 'guide') {
+    landedOnStaticPage = false;
+    app.querySelector('.masthead')?.replaceWith(masthead());
+    return;
+  }
   // A fresh view element per route: async work checks view.isConnected before painting,
   // so a slow response for a page the user already left is simply dropped.
   const view = document.createElement('div');
   view.className = 'view';
   app.replaceChildren(view);
-  const r = routeFromPath(location.pathname);
-  const id = ++routeId;
 
   if (r.kind === 'home') {
     setPageMeta(HOME_TITLE, HOME_DESCRIPTION, '');
@@ -58,6 +69,18 @@ function route(userNavigation: boolean): void {
       body.innerHTML = methodologyBody(BASE);
       // Landing on /docs/methodology#section: the anchor target only exists now.
       if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+    } else if (r.kind === 'guide') {
+      const guide = r.guide;
+      setPageMeta(guide.title, guide.description, guide.path);
+      if (guide.ready) {
+        void fetchStatic<InsightsFile>('data/insights.json').then((insights) => {
+          if (!view.isConnected) return;
+          body.innerHTML = guide.body(BASE, insights);
+          if (userNavigation) view.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
+        });
+      } else {
+        body.innerHTML = guide.body(BASE);
+      }
     } else if (r.kind === 'missing') {
       setPageMeta('Not found · humanloads', HOME_DESCRIPTION, null);
       body.innerHTML = `
@@ -67,26 +90,15 @@ function route(userNavigation: boolean): void {
           <p><a href="${BASE}">Search for a package</a></p>
         </section>`;
     } else if (r.kind === 'compare') {
-      const path = `compare/${r.names.join(',')}`;
-      setPageMeta(compareTitle(r.names), compareDescription(r.names), path);
-      // Same description as the prerendered page when every package has build-time numbers.
-      void fetchStatic<{ packages?: Record<string, FeaturedRow> }>('data/summary.json').then((s) => {
-        const rows = r.names.map((n) => s?.packages?.[n]);
-        if (id === routeId) setPageMeta(compareTitle(r.names), compareDescription(r.names, rows), path);
-      });
+      if (!landedOnStaticPage) setPageMeta(compareTitle(r.names), compareDescription(r.names), `compare/${r.names.join(',')}`);
       renderCompare(body, r.names);
     } else {
-      const name = r.name;
-      setPageMeta(packageTitle(name), packageDescription(name), name);
-      // Same description as the prerendered page: it quotes the build-time numbers when there are some.
-      void fetchStatic<{ packages?: Record<string, FeaturedRow> }>('data/summary.json').then((s) => {
-        const row = s?.packages?.[name];
-        if (row && id === routeId) setPageMeta(packageTitle(name), packageDescription(name, row), name);
-      });
+      if (!landedOnStaticPage) setPageMeta(packageTitle(r.name), packageDescription(r.name), r.name);
       renderPackage(body, r.name);
     }
   }
 
+  landedOnStaticPage = false;
   if (userNavigation) {
     window.scrollTo(0, 0);
     view.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });

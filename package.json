@@ -2,7 +2,7 @@
   "name": "humanloads",
   "version": "0.0.0",
   "private": true,
-  "description": "npm counts every tarball fetch. humanloads estimates the humans.",
+  "description": "npm counts every tarball fetch. humanloads shows how much of it is noise.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -20,6 +20,8 @@
   },
   "devDependencies": {
     "@types/node": "22.20.5",
+    "@types/semver": "7.8.0",
+    "semver": "7.8.6",
     "typescript": "7.0.2",
     "vite": "8.3.5"
   }
