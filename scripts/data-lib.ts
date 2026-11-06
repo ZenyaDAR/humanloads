@@ -1,15 +1,16 @@
 // Pure helpers for scripts/build-data.mjs and scripts/prerender.mjs, kept apart from those scripts' top-level
 // network/file work so tests can import them. Only erasable TS syntax: Node runs this file by type stripping.
 import semver from 'semver';
-import type { Calibration, ChainStep, DeprecatedRow, FeaturedRow, InsightsFile, MarketGrowth, RawPackageData, ShieldsBadge } from '../src/core/types.ts';
+import type { Calibration, ChainStep, DeprecatedRow, FeaturedRow, InsightsFile, ListData, ListRow, MarketGrowth, RawPackageData, ShieldsBadge } from '../src/core/types.ts';
 import { addDays, median } from '../src/core/estimate.ts';
 import { esc } from '../src/core/html.ts';
 import {
   FILTERED_NOTE, HOME_DESCRIPTION, HOME_PITCH, HOME_TITLE, NOISE_CAPTION, NOISIEST_CAPTION, NOISIEST_NOTE, NOISIEST_TITLE, REPO_LINK_HTML, REPO_URL, SITE_NAME, compareDescription, compareLinksHtml,
-  comparePath, compareTitle, deprecatedHtml, isIndexable, noiseBar, noiseText, numberCardsHtml, packageDescription, peopleAnswerHtml, popularHtml, homeFaqHtml, packageTitle, rangeText, roundCount,
+  HOME_COMPARE_SIZE, comparePath, compareTitle, deprecatedHtml, isIndexable, noiseBar, noiseText, numberCardsHtml, packageDescription, peopleAnswerHtml, popularHtml, homeFaqHtml, packageTitle, rangeText, roundCount,
 } from '../src/core/seo.ts';
 import { MARKET_MIN_WEEKLY, adoptionHtml, chainHtml, factsHtml } from '../src/core/insights.ts';
 import { GUIDES, HOME_FAQ, type Guide } from '../src/core/guides.ts';
+import { LIST_DEFS, listLinksHtml } from '../src/core/lists.ts';
 import {
   METHODOLOGY_DESCRIPTION, METHODOLOGY_FAQ, METHODOLOGY_PATH, METHODOLOGY_SECTIONS, METHODOLOGY_TITLE, methodologyBody,
 } from '../src/core/methodology.ts';
@@ -19,6 +20,7 @@ export { esc };
 const FEATURED_SIZE = 8;
 const EXAMPLES_SIZE = 4;
 const POPULAR_SIZE = 36; // internal links from the homepage, so crawlers reach package pages in one step
+const AUTO_LIST_SIZE = 50; // rows in a list over the whole catalog
 const NOISY_MIN_NPM = 100;
 const NOISY_MIN_SHARE = 0.3;
 // A release puts a package in this list for days whatever its real use, so only settled packages qualify.
@@ -174,6 +176,38 @@ export function dependencyChains(rows: FeaturedRow[]): Record<string, ChainStep[
   return Object.fromEntries(chains);
 }
 
+const listRow = (r: FeaturedRow): ListRow => ({
+  name: r.name,
+  ...(r.description && { description: r.description }),
+  npmWeekly: r.npmWeekly,
+  organicWeekly: r.organicWeekly,
+  low: r.low,
+  high: r.high,
+  confidence: r.confidence,
+  ...(r.facts?.deprecated && { deprecated: true }),
+  ...(r.facts?.lastRelease && { lastRelease: r.facts.lastRelease.day }),
+  ...(r.updated && { updated: r.updated }),
+});
+
+// Too-new packages have no ranking number yet. @types stubs would crowd lists over the whole catalog without saying anything.
+export function buildLists(rows: FeaturedRow[], pairs: string[][] = []): Record<string, ListData> {
+  const ranked = rows.filter((r) => !r.tooNew);
+  const whole = ranked.filter((r) => !r.name.startsWith('@types/'));
+  return Object.fromEntries(
+    LIST_DEFS.map((def) => {
+      const names = def.names;
+      if (!names) {
+        const top = [...whole].sort((a, b) => b.npmWeekly - a.npmWeekly).slice(0, AUTO_LIST_SIZE);
+        return [def.slug, { rows: top.map(listRow), pairs: [], catalog: rows.length }];
+      }
+      const picked = ranked.filter((r) => names.includes(r.name)).sort((a, b) => b.organicWeekly - a.organicWeekly);
+      const inList = new Set(picked.map((r) => r.name));
+      // Only pairs whose packages both have numbers: the others' compare pages stay out of indexes.
+      return [def.slug, { rows: picked.map(listRow), pairs: pairs.filter((p) => p.every((n) => inList.has(n))) }];
+    }),
+  );
+}
+
 export function buildInsights(rows: FeaturedRow[], generated: string): InsightsFile {
   return { generated, market: marketGrowth(rows), deprecated: deprecatedRows(rows), chains: dependencyChains(rows) };
 }
@@ -182,11 +216,46 @@ export function buildInsights(rows: FeaturedRow[], generated: string): InsightsF
 
 // What a previous summary.json gives this build. With another model version its numbers can't be mixed with new ones, but
 // its names stay `pending`: their pages keep working with generic text until they get their turn, instead of turning into 404s.
-export function readPrevious(body: unknown, model: string): { rows: Record<string, FeaturedRow>; pending: string[] } {
-  const b = body as { model?: string; packages?: Record<string, FeaturedRow>; pending?: string[] } | null;
+export function readPrevious(body: unknown, model: string): { rows: Record<string, FeaturedRow>; pending: string[]; archived: string[] } {
+  const b = body as { model?: string; packages?: Record<string, FeaturedRow>; pending?: string[]; archived?: string[] } | null;
   if (!b?.packages || typeof b.packages !== 'object') throw new Error('summary.json has no packages');
   const pending = Array.isArray(b.pending) ? b.pending : [];
-  return b.model === model ? { rows: b.packages, pending } : { rows: {}, pending: [...new Set([...Object.keys(b.packages), ...pending])] };
+  const archived = Array.isArray(b.archived) ? b.archived : [];
+  return b.model === model ? { rows: b.packages, pending, archived } : { rows: {}, pending: [...new Set([...Object.keys(b.packages), ...pending])], archived };
+}
+
+// Names that left the catalog (over the cap, or not refreshed for weeks) keep a page without numbers and out of search
+// indexes: a link to it still works, and a 404 would be the worse answer. Unpublished and blocked names do leave.
+// ponytail: oldest dropped past the cap, about 50 MB of HTML. Raise it if GitHub Pages' size limit allows and old links matter.
+const ARCHIVE_MAX = 5000;
+export function archiveNames(
+  known: string[],
+  stay: { has(name: string): boolean },
+  gone: { has(name: string): boolean },
+  max = ARCHIVE_MAX,
+): string[] {
+  return [...new Set(known)].filter((n) => !stay.has(n) && !gone.has(n)).slice(-max);
+}
+
+// Comparison and list packages are too many to fetch every night, and they would leave no budget for the rest of the
+// catalog. A share of the budget rotates through them: names with no row first, then the stalest. Pages wait on names
+// with no row (a new pair, a model change), so those may take up to `maxMissing` until they all have one.
+export function curatedToRefresh(names: string[], previous: Record<string, FeaturedRow>, max: number, maxMissing = max): string[] {
+  const updated = (n: string) => (Object.hasOwn(previous, n) ? (previous[n].updated ?? '') : '');
+  const sorted = [...new Set(names)].sort((a, b) => updated(a).localeCompare(updated(b)));
+  const missing = sorted.filter((n) => !Object.hasOwn(previous, n)).length;
+  return sorted.slice(0, Math.max(max, Math.min(missing, maxMissing)));
+}
+
+// Which comparison pages exist. `pairs` have numbers for every package: indexable, in the sitemap and in links.
+// `pages` adds pairs whose names wait for numbers or left the catalog, so their URLs keep working out of indexes.
+// A name never fetched has no page yet.
+export function comparePages(all: string[][], packages: Record<string, unknown>, waiting: string[]): { pairs: string[][]; pages: string[][] } {
+  const known = new Set(waiting);
+  return {
+    pairs: all.filter((p) => p.every((n) => Object.hasOwn(packages, n))),
+    pages: all.filter((p) => p.every((n) => Object.hasOwn(packages, n) || known.has(n))),
+  };
 }
 
 // Which packages to fetch tonight: required ones, then a share of what is left for names new to the catalog (half
@@ -200,8 +269,10 @@ export function topPages(dayNumber: number): number[] {
   return Array.from({ length: TOP_PAGES_PER_RUN }, (_, i) => ((start + i) % TOP_DEPTH) + 1);
 }
 
-export function refreshPlan(must: string[], seeds: string[], previous: Record<string, FeaturedRow>, budget: number): string[] {
+// Names that lost their numbers to a model change come right after the required ones: their pages are out of indexes until then.
+export function refreshPlan(must: string[], seeds: string[], previous: Record<string, FeaturedRow>, budget: number, pending: string[] = []): string[] {
   const plan = new Set(must);
+  for (const n of pending) if (plan.size < budget) plan.add(n);
   const fresh = [...new Set(seeds)].filter((n) => !Object.hasOwn(previous, n) && !plan.has(n));
   const stalest = Object.values(previous)
     .filter((r) => !plan.has(r.name))
@@ -471,7 +542,8 @@ export function homeHtml(shell: string, site: string, featured: Featured | null,
       ${popularHtml(base, featured?.popular ?? [])}
       ${asOf ? `<p class="fineprint">Updated ${esc(asOf)}. Weekly numbers, last 7 days.</p>` : ''}
     </div>
-    ${compareLinksHtml(base, pairs, esc)}
+    ${compareLinksHtml(base, pairs.slice(0, HOME_COMPARE_SIZE), esc)}
+    ${listLinksHtml(base)}
     <aside class="home-note">
       <p class="hand">how it works</p>
       ${METHOD_STEPS}
@@ -614,7 +686,8 @@ export function compareHtml(
       },
     ],
   };
-  return withPage(shell, { title, description, url, body, jsonLd: ld });
+  // Without numbers (their turn hasn't come since a model change) the page is thin: it stays reachable, out of indexes.
+  return withPage(shell, { title, description, url, body, jsonLd: ld, noindex: !known });
 }
 
 // docs/methodology.html: the English methodology, as an article with an FAQ.
@@ -658,7 +731,7 @@ export function methodologyHtml(shell: string, site: string, modified?: string):
 }
 
 // docs/<guide>.html: a short answer to one plain question.
-export function guideHtml(shell: string, site: string, guide: Guide, insights?: InsightsFile | null): string {
+export function guideHtml<T>(shell: string, site: string, guide: Guide<T>, data?: T | null): string {
   const base = new URL(site).pathname;
   const url = site + guide.path;
   const name = guide.title.replace(/ · .*$/, '');
@@ -681,9 +754,9 @@ export function guideHtml(shell: string, site: string, guide: Guide, insights?: 
     title: guide.title,
     description: guide.description,
     url,
-    body: `<div class="view">${masthead(base)}${guide.body(base, insights)}</div>`,
+    body: `<div class="view">${masthead(base)}${guide.body(base, data)}</div>`,
     jsonLd: ld,
-    noindex: guide.ready ? !guide.ready(insights) : false,
+    noindex: guide.ready ? !guide.ready(data) : false,
   });
 }
 
@@ -720,9 +793,12 @@ Sitemap: ${site}sitemap.xml
 }
 
 // https://llmstxt.org: a Markdown index for language models.
-export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }[], generated?: string, pairs: string[][] = []): string {
+export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }[], generated?: string, pairs: string[][] = [], lists: Pick<Guide, 'title' | 'path'>[] = []): string {
   const compares = pairs.length
     ? `\n## Comparisons\n\n${pairs.map((p) => `- [${p.join(' vs ')}](${site}${comparePath(p)})`).join('\n')}\n`
+    : '';
+  const ranked = lists.length
+    ? `\n## Ranked lists\n\n${lists.map((g) => `- [${g.title.replace(/ · .*$/, '')}](${site}${g.path})`).join('\n')}\n`
     : '';
   const asOf = day(generated);
   const list = pages
@@ -762,12 +838,13 @@ ${GUIDES.map((g) => `- [${g.title.replace(/ · .*$/, '')}](${site}${g.path})`).j
 - [summary.json](${site}data/summary.json): per package: npmWeekly, organicWeekly (real installs), low, high, inflation (noise share, 0–1), confidence, tooNew, updated (date of that row)
 - [featured.json](${site}data/featured.json): examples, and noisiest: settled packages with the most noise in npm's count
 - [insights.json](${site}data/insights.json): deprecated (the most downloaded deprecated packages), chains (dependency trails), market (median growth)
+- [lists.json](${site}data/lists.json): the rows behind the ranked lists, by list slug
 - [badges/index.json](${site}badges/index.json): packages with a shields.io endpoint badge at ${site}badges/<name>.json (\`@scope/name\` is written \`scope__name\`)
 
 ## Package pages
 
 ${list}
-${compares}
+${compares}${ranked}
 ## Optional
 
 - [Source code](${REPO_URL})

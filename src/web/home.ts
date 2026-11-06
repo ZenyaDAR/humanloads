@@ -1,6 +1,7 @@
 import { isValidPackageName, searchPackages } from '../core/sources.ts';
 import type { FeaturedFile, FeaturedRow, SearchHit } from '../core/types.ts';
-import { HOME_PITCH, NOISIEST_CAPTION, NOISIEST_NOTE, NOISIEST_TITLE, compareLinksHtml, homeFaqHtml, popularHtml, noiseBar, rangeText, roundCount } from '../core/seo.ts';
+import { HOME_COMPARE_SIZE, HOME_PITCH, NOISIEST_CAPTION, NOISIEST_NOTE, NOISIEST_TITLE, compareLinksHtml, homeFaqHtml, popularHtml, noiseBar, rangeText, roundCount } from '../core/seo.ts';
+import { listLinksHtml } from '../core/lists.ts';
 import COMPARE_PAIRS from '../../data/compare.json';
 import {
   BASE, esc, fetchStatic, fmt, fmtCompact, fmtDate, navigate, pkgHref, METHODOLOGY_URL, headTools, timeAgo,
@@ -26,7 +27,8 @@ export function renderHome(view: HTMLElement): void {
       </p>
     </section>
     <div class="featured"></div>
-    ${compareLinksHtml(BASE, COMPARE_PAIRS, esc)}
+    ${compareLinksHtml(BASE, COMPARE_PAIRS.slice(0, HOME_COMPARE_SIZE), esc)}
+    ${listLinksHtml(BASE)}
     <aside class="home-note">
       <p class="hand">how it works</p>
       <ol>

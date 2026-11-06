@@ -54,7 +54,7 @@ jobs:
       # The key hashes the code and lists that shape the data, so a build never prerenders numbers from another model
       # or format, and a new blocklist entry refetches instead of shipping today's files with the name still in them.
       - id: data
-        run: echo "key=data-$(date -u +%F)-${{ hashFiles('src/core/estimate.ts', 'src/core/insights.ts', 'src/core/sources.ts', 'scripts/build-data.mjs', 'scripts/data-lib.ts', 'data/seeds.json', 'data/blocklist.json') }}" >> "$GITHUB_OUTPUT"
+        run: echo "key=data-$(date -u +%F)-${{ hashFiles('src/core/estimate.ts', 'src/core/insights.ts', 'src/core/sources.ts', 'src/core/lists.ts', 'scripts/build-data.mjs', 'scripts/data-lib.ts', 'data/seeds.json', 'data/blocklist.json', 'data/compare.json') }}" >> "$GITHUB_OUTPUT"
       - id: cache
         uses: actions/cache/restore@v6
         with:

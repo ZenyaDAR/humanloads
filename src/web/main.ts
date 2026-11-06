@@ -8,7 +8,7 @@ import {
 } from '../core/seo.ts';
 import { METHODOLOGY_DESCRIPTION, METHODOLOGY_PATH, METHODOLOGY_TITLE, methodologyBody } from '../core/methodology.ts';
 import { GUIDES, type Guide } from '../core/guides.ts';
-import type { InsightsFile } from '../core/types.ts';
+import { LISTS } from '../core/lists.ts';
 import { BASE, esc, fetchStatic, navigate, setPageMeta } from './util.ts';
 
 const app = document.getElementById('app')!;
@@ -16,7 +16,8 @@ const app = document.getElementById('app')!;
 // shell have an empty #app. Later routes get the generic text: only crawlers read it, and they land on pages directly.
 let landedOnStaticPage = app.childElementCount > 0;
 
-type Route = { kind: 'home' } | { kind: 'methodology' } | { kind: 'guide'; guide: Guide } | { kind: 'package'; name: string } | { kind: 'compare'; names: string[] } | { kind: 'missing' };
+// Each guide reads the data file it names, so the file and its reader agree by construction.
+type Route = { kind: 'home' } | { kind: 'methodology' } | { kind: 'guide'; guide: Guide<any> } | { kind: 'package'; name: string } | { kind: 'compare'; names: string[] } | { kind: 'missing' };
 
 // pathname minus base: "" -> home, "<name>" or "@scope/<name>" -> package page,
 // "compare/a,b[,c]" -> compare. A comma is never valid in a package name, so a bare "compare" stays a package.
@@ -32,7 +33,7 @@ function routeFromPath(pathname: string): Route {
   rest = rest.slice(BASE.length).replace(/\/+$/, '');
   if (rest === '' || rest === 'index.html') return { kind: 'home' };
   if (rest === METHODOLOGY_PATH) return { kind: 'methodology' };
-  const guide = GUIDES.find((g) => g.path === rest);
+  const guide = [...GUIDES, ...LISTS].find((g) => g.path === rest);
   if (guide) return { kind: 'guide', guide };
   if (rest.startsWith('compare/')) {
     const names = [...new Set(rest.slice('compare/'.length).split(',').map((n) => n.trim()))];
@@ -73,9 +74,9 @@ function route(userNavigation: boolean): void {
       const guide = r.guide;
       setPageMeta(guide.title, guide.description, guide.path);
       if (guide.ready) {
-        void fetchStatic<InsightsFile>('data/insights.json').then((insights) => {
+        void fetchStatic<unknown>(guide.dataFile ?? 'data/insights.json').then((data) => {
           if (!view.isConnected) return;
-          body.innerHTML = guide.body(BASE, insights);
+          body.innerHTML = guide.body(BASE, data);
           if (userNavigation) view.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
         });
       } else {

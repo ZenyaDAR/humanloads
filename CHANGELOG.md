@@ -9,6 +9,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (Added
 
 ### Added
 
+- Ranked lists under `/lists/`: the most downloaded npm packages, and the best packages by category, ordered by real installs.
+- Comparison pages for 100 pairs, up from 32.
 - A list of the [most downloaded deprecated npm packages](https://humanloads.dev/docs/deprecated-npm-packages), with each maintainer's own message.
 - Package pages show a dependency trail where one can be followed: when one package requires another and the matching versions get
   nearly the same downloads, it probably explains them. There is also a [guide using is-number as the example](https://humanloads.dev/docs/why-is-number-has-so-many-downloads).
@@ -17,6 +19,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (Added
 
 ### Changed
 
+- A package that leaves the catalog keeps its page, out of search indexes, instead of turning into a 404. So does a comparison page waiting for numbers.
+- Comparison packages are refreshed in rotation rather than every night, so the rest of the catalog keeps growing. Their pages show the date of their oldest row.
 - The number is now called **real installs**: npm's count without publish spikes and the crawler floor. CI, builds and dependency
   installs remain, which the methodology spells out. Titles and text now use what people search for ("npm downloads", "npm download stats").
 - New guides: how to check an npm package's download count, and whether npm downloads are real. The homepage gained popular

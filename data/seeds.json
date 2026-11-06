@@ -1,4 +1,5 @@
 [
+  "perimeterx-js-core", "@fluid-app/fluid-cli-setup",
   "request", "enzyme", "gulp", "grunt", "jquery", "bower", "node-sass", "tslint", "create-react-app", "webpack", "underscore", "moment", "karma", "protractor", "phantomjs-prebuilt", "mocha", "jasmine", "redux", "node-fetch", "axios",
   "is-number", "to-regex-range", "fill-range", "braces", "micromatch", "chokidar", "fast-glob", "anymatch", "readdirp", "glob",
   "mimic-fn", "path-is-absolute", "pkg-dir", "whatwg-encoding", "node-domexception", "inflight", "read-pkg-up", "find-cache-dir", "no-case", "lower-case", "dot-case", "p-finally", "lodash.isequal", "param-case", "camel-case", "tsconfck", "pascal-case", "abab", "prebuild-install", "domexception", "snake-case", "os-tmpdir", "global-dirs", "fstream", "npmlog", "gauge", "are-we-there-yet", "crypto-js", "pkg-up", "lodash.get", "upper-case", "querystring",

@@ -482,6 +482,9 @@ h1, h2 { margin: 0; font-weight: 600; }
 .chain-n { font: 600 0.9rem var(--mono); }
 .chain-n::before { content: "· "; color: var(--ink-soft); font-weight: 400; }
 .dep-msg { min-width: 24ch; overflow-wrap: anywhere; }
+.list-desc { display: block; margin-top: 2px; font-size: .85rem; font-weight: 400; color: var(--ink-soft); min-width: 28ch; }
+.list-table th, .list-table td { vertical-align: top; }
+.list-table td:nth-of-type(4) { white-space: nowrap; }
 .dep-table th, .dep-table td { vertical-align: top; }
 .dep-table td:nth-of-type(2) { white-space: nowrap; }
 

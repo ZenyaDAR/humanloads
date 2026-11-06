@@ -151,12 +151,38 @@ export interface MarketGrowth {
   packages: number;
 }
 
+// One row of a ranked list page (src/core/lists.ts).
+export interface ListRow {
+  name: string;
+  description?: string;
+  npmWeekly: number;
+  organicWeekly: number;
+  low: number;
+  high: number;
+  confidence: Confidence;
+  deprecated?: boolean;
+  lastRelease?: string; // YYYY-MM-DD
+  updated?: string; // ISO date of the build that fetched this row
+}
+
+export interface ListData {
+  rows: ListRow[]; // best first
+  pairs: string[][]; // comparison pages between packages of this list
+  catalog?: number; // lists over the whole catalog: how many packages it held
+}
+
 // Derived from the catalog each night -> public/data/insights.json, for package pages and guides.
 export interface InsightsFile {
   generated: string;
   market: MarketGrowth;
   deprecated: DeprecatedRow[];
   chains: Record<string, ChainStep[]>;
+}
+
+// Rows for the list pages -> public/data/lists.json, apart from insights.json because only those pages need them.
+export interface ListsFile {
+  generated: string;
+  lists: Record<string, ListData>; // by list slug
 }
 export interface FeaturedFile {
   generated: string; // ISO date

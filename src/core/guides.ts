@@ -5,13 +5,14 @@ import { CHAIN_GUIDE_PATH, chainListHtml } from './insights.ts';
 import { METHODOLOGY_PATH } from './methodology.ts';
 import type { InsightsFile } from './types.ts';
 
-export interface Guide {
+export interface Guide<T = InsightsFile> {
   path: string;
   title: string;
   description: string;
-  body: (base: string, insights?: InsightsFile | null) => string;
+  body: (base: string, data?: T | null) => string;
   // For a guide built on nightly data: without enough of it the page is thin, so it stays out of search indexes.
-  ready?: (insights?: InsightsFile | null) => boolean;
+  ready?: (data?: T | null) => boolean;
+  dataFile?: string; // where that data lives, when it isn't data/insights.json
 }
 
 export const DEPRECATED_GUIDE_PATH = 'docs/deprecated-npm-packages';
@@ -53,7 +54,7 @@ export const HOME_FAQ: [string, string][] = [
 ];
 
 const check = (base: string) => `<p class="method"><a href="${base}">Check a package <span aria-hidden="true">→</span></a></p>`;
-const article = (h1: string, lede: string, sections: string, base: string) => `<article class="pkg doc">
+export const article = (h1: string, lede: string, sections: string, base: string) => `<article class="pkg doc">
   <header class="pkg-head">
     <h1 tabindex="-1">${h1}</h1>
     <p class="doc-lede">${lede}</p>

@@ -4,6 +4,7 @@
 //   public/data/featured.json     homepage cards
 //   public/data/summary.json      per-package numbers for every estimated package (prerendered pages, sitemap)
 //   public/data/insights.json     derived from the catalog: deprecated list, dependency trails, median growth
+//   public/data/lists.json        the rows behind the ranked list pages
 //   public/badges/<safe>.json     shields.io endpoint badges for data/tracked.json, plus badges/index.json
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -13,7 +14,8 @@ import { awaitingEvidence, estimate, MODEL_VERSION } from '../src/core/estimate.
 import { packageFacts } from '../src/core/insights.ts';
 import { PackageNotFoundError } from '../src/core/types.ts';
 import { resolveSiteUrl } from '../site.config.ts';
-import { badgeFor, buildInsights, calibrate, deprecatedToRefresh, mergeCatalog, poolFailure, readPrevious, refreshPlan, safeName, selectFeatured, topPages } from './data-lib.ts';
+import { LIST_NAMES } from '../src/core/lists.ts';
+import { archiveNames, badgeFor, buildInsights, buildLists, calibrate, curatedToRefresh, deprecatedToRefresh, mergeCatalog, poolFailure, readPrevious, refreshPlan, safeName, selectFeatured, topPages } from './data-lib.ts';
 
 const CANARY = 'humanloads-canary';
 const CONCURRENCY = 4;
@@ -27,6 +29,7 @@ const RECENT_URL = 'https://packages.ecosyste.ms/api/v1/registries/npmjs.org/pac
 const RECENT_PAGES = 2;
 const RECENT_MIN_MONTHLY = 400; // ~100/week, the inflated-list threshold
 const MAX_PACKAGES = 150; // fetchPackageData calls per run
+const CURATED_NIGHTLY = 60; // of those, comparison and list packages: all of them within a few nights
 const MAX_RETRIES = 6;
 const EVIDENCE_RETRIES = 1; // optional data: an outage there must not stall the run for an hour
 const MAX_RETRY_AFTER_MS = 120_000;
@@ -116,13 +119,13 @@ if (!calibration) await write('data/calibration.json', {});
 // A site's very first deploy has no file yet: set ALLOW_EMPTY_CATALOG=1 for that one run.
 async function previousCatalog() {
   const res = await retryFetch(`${resolveSiteUrl()}data/summary.json`);
-  if (res.status === 404 && process.env.ALLOW_EMPTY_CATALOG) return { rows: {}, pending: [] };
+  if (res.status === 404 && process.env.ALLOW_EMPTY_CATALOG) return { rows: {}, pending: [], archived: [] };
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return readPrevious(await res.json(), MODEL_VERSION);
 }
-let previous, pending;
+let previous, pending, archived;
 try {
-  ({ rows: previous, pending } = await previousCatalog());
+  ({ rows: previous, pending, archived } = await previousCatalog());
 } catch (err) {
   console.error(`data: aborting, could not read the previous catalog (${err.message}); nothing written`);
   process.exit(1);
@@ -168,21 +171,28 @@ const latest = await pool(unseen, async (name) => {
 });
 const retired = unseen.filter((n) => latest.get(n));
 console.log(`checked ${unseen.length} new top names, ${retired.length} deprecated`);
-// Names that already have a page come first.
-const seeds = [...pending, ...retired, ...handSeeds];
-for (let i = 0; i < Math.max(top.length, searched.length, recent.length); i++) {
-  seeds.push(top[i], searched[i], recent[i]);
+const seeds = [...retired, ...handSeeds];
+// A small name that fixed searches or recent releases keep returning would be fetched, evicted at the cap and fetched
+// again, its page in and out of indexes every other night. Once archived it only comes back through the top list.
+const isArchived = new Set(archived);
+const fresher = (names) => names.filter((n) => !isArchived.has(n));
+const [searchedNew, recentNew] = [fresher(searched), fresher(recent)];
+for (let i = 0; i < Math.max(top.length, searchedNew.length, recentNew.length); i++) {
+  seeds.push(top[i], searchedNew[i], recentNew[i]);
 }
-// Tracked and comparison packages are refreshed every night, so a badge or compare page never goes stale.
+// Tracked packages are refreshed every night so a badge never goes stale; comparison and list packages in rotation.
 // `--limit N` (or DATA_LIMIT=N) caps the optional names for quick local runs, required ones always run; CI uses MAX_PACKAGES.
 const limitArg = process.argv.indexOf('--limit');
 const limit = Number(limitArg > 0 ? process.argv[limitArg + 1] : process.env.DATA_LIMIT) || MAX_PACKAGES;
 // Names come from third-party APIs and later reach URLs and file paths.
 const usable = (name) => typeof name === 'string' && name !== CANARY && !blocked.has(name) && isValidPackageName(name);
-const must = [...new Set([...tracked, ...comparePairs.flat()])].filter(usable);
+const curated = [...new Set([...comparePairs.flat(), ...LIST_NAMES])].filter(usable);
+const must = [...new Set([...tracked.filter(usable), ...curatedToRefresh(curated, previous, CURATED_NIGHTLY, MAX_PACKAGES)])];
+// Hand seeds too: picked for a reason, and at the cap a small one would otherwise leave and return every other night.
+const keep = new Set([...tracked, ...curated, ...handSeeds]);
 // Whatever the homepage shows is refreshed nightly too: it says "no release in the last two weeks" and must stay true.
 const shown = [...selectFeatured(Object.values(previous)).noisiest.map((r) => r.name), ...deprecatedToRefresh(Object.values(previous))].filter(usable);
-const candidates = refreshPlan([...new Set([...must, ...shown])], seeds.filter(usable), previous, Math.min(limit, MAX_PACKAGES));
+const candidates = refreshPlan([...new Set([...must, ...shown])], seeds.filter(usable), previous, Math.min(limit, MAX_PACKAGES), pending.filter(usable));
 console.log(`refreshing ${candidates.length}: ${must.length} required, new names from ${top.length} top, ${searched.length} searched, ${recent.length} recent`);
 
 const opts = calibration ? { calibration } : {};
@@ -228,7 +238,7 @@ if (failure) {
   process.exit(1);
 }
 
-const catalog = mergeCatalog(previous, fresh, { gone: notFound, blocked, keep: new Set(must), now: updated });
+const catalog = mergeCatalog(previous, fresh, { gone: notFound, blocked, keep, now: updated });
 
 // Featured cards.
 const { examples, popular, noisiest } = selectFeatured(Object.values(catalog));
@@ -236,6 +246,7 @@ const generated = updated;
 await write('data/featured.json', { generated, examples, popular, noisiest });
 const insights = buildInsights(Object.values(catalog), generated);
 await write('data/insights.json', insights);
+await write('data/lists.json', { generated, lists: buildLists(Object.values(catalog), comparePairs) });
 
 // Badges for tracked packages.
 const badged = [];
@@ -249,9 +260,11 @@ await write('badges/index.json', badged);
 
 // Numbers for the prerendered pages: the whole catalog, each row with the date it was last refreshed.
 const stillPending = pending.filter((n) => usable(n) && !Object.hasOwn(catalog, n) && !notFound.has(n));
-await write('data/summary.json', { generated, model: MODEL_VERSION, packages: catalog, pending: stillPending });
+const stay = new Set([...Object.keys(catalog), ...stillPending]);
+const archive = archiveNames([...archived, ...Object.keys(previous), ...pending].filter(usable), stay, notFound);
+await write('data/summary.json', { generated, model: MODEL_VERSION, packages: catalog, pending: stillPending, archived: archive });
 
 console.log(
-  `data: ${fresh.size}/${candidates.length} packages refreshed, ${Object.keys(catalog).length} in the catalog, ${stillPending.length} pending; ` +
+  `data: ${fresh.size}/${candidates.length} packages refreshed, ${Object.keys(catalog).length} in the catalog, ${stillPending.length} pending, ${archive.length} archived; ` +
     `featured ${examples.length} examples + ${noisiest.length} noisiest; ${insights.deprecated.length} deprecated, ${Object.keys(insights.chains).length} trails; ${badged.length} badges; calibration ${calibration ? 'yes' : 'no'}`,
 );

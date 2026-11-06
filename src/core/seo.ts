@@ -176,6 +176,9 @@ export function compareTitle(names: string[]): string {
 
 export const comparePath = (names: string[]) => `compare/${names.join(',')}`;
 
+// The home page links this many comparisons; the rest are reached through package pages, lists and each other.
+export const HOME_COMPARE_SIZE = 32;
+
 // "Popular comparisons" links (data/compare.json), shared by the SPA home and the prerendered pages.
 // `esc` is passed in so this module stays free of DOM and Node imports.
 export function compareLinksHtml(base: string, pairs: string[][], esc: (s: string) => string, title = 'Popular comparisons'): string {
