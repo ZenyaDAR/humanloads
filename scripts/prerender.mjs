@@ -80,7 +80,7 @@ for (const name of names) {
   const i = indexable.indexOf(name);
   const related = Array.from({ length: Math.min(RELATED, indexable.length - (i < 0 ? 0 : 1)) }, (_, k) => indexable[(i + 1 + k) % indexable.length]);
   const comparisons = pairs.filter((p) => p.includes(name));
-  const html = prerenderHtml(shell, name, packages[name], SITE, { generated: packages[name]?.updated ?? summary?.generated, related, comparisons, insights });
+  const html = prerenderHtml(shell, name, packages[name], SITE, { generated: packages[name]?.updated ?? summary?.generated, related, comparisons, insights, lists: listsFile });
   const file = new URL(`${name}.html`, dist);
   await mkdir(new URL('.', file), { recursive: true });
   await writeFile(file, html);

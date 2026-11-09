@@ -691,6 +691,7 @@ table[style*='--floor'] td.bar-col .vbar::after {
 .chart-fig .sk-chart { height: auto; aspect-ratio: 100 / 48; min-height: 230px; max-height: 340px; }
 .cmp-table tbody th { overflow-wrap: normal; }
 .cmp-table tbody th a { font-weight: 600; }
+.cmp-table tr.is-self th, .cmp-table tr.is-self td { font-weight: 700; color: var(--ink-soft); }
 .cmp-table .key-line { width: 18px; margin-right: 8px; vertical-align: middle; }
 .cmp-table td:last-child, .cmp-table thead th:last-child { padding-left: 18px; }
 /* Five columns do not fit a phone: each package becomes a small card with labelled fields. */

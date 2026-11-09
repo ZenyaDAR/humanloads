@@ -1,16 +1,16 @@
 // Pure helpers for scripts/build-data.mjs and scripts/prerender.mjs, kept apart from those scripts' top-level
 // network/file work so tests can import them. Only erasable TS syntax: Node runs this file by type stripping.
 import semver from 'semver';
-import type { Calibration, ChainStep, DeprecatedRow, FeaturedRow, InsightsFile, ListData, ListRow, MarketGrowth, RawPackageData, ShieldsBadge } from '../src/core/types.ts';
+import type { Calibration, ChainStep, DeprecatedRow, FeaturedRow, InsightsFile, ListData, ListRow, ListsFile, MarketGrowth, RawPackageData, ShieldsBadge } from '../src/core/types.ts';
 import { addDays, median } from '../src/core/estimate.ts';
 import { esc } from '../src/core/html.ts';
 import {
   FILTERED_NOTE, HOME_DESCRIPTION, HOME_PITCH, HOME_TITLE, NOISE_CAPTION, NOISIEST_CAPTION, NOISIEST_NOTE, NOISIEST_TITLE, REPO_LINK_HTML, REPO_URL, SITE_NAME, compareDescription, compareLinksHtml,
   HOME_COMPARE_SIZE, comparePath, compareTitle, deprecatedHtml, isIndexable, noiseBar, noiseText, numberCardsHtml, packageDescription, peopleAnswerHtml, popularHtml, homeFaqHtml, packageTitle, rangeText, roundCount,
 } from '../src/core/seo.ts';
-import { MARKET_MIN_WEEKLY, adoptionHtml, chainHtml, factsHtml } from '../src/core/insights.ts';
+import { MARKET_MIN_WEEKLY, adoptionHtml, chainHtml, factsHtml, monthlyHtml } from '../src/core/insights.ts';
 import { GUIDES, HOME_FAQ, type Guide } from '../src/core/guides.ts';
-import { LIST_DEFS, listLinksHtml } from '../src/core/lists.ts';
+import { LIST_DEFS, categoryRankHtml, listLinksHtml } from '../src/core/lists.ts';
 import {
   METHODOLOGY_DESCRIPTION, METHODOLOGY_FAQ, METHODOLOGY_PATH, METHODOLOGY_SECTIONS, METHODOLOGY_TITLE, methodologyBody,
 } from '../src/core/methodology.ts';
@@ -404,6 +404,7 @@ export interface PackagePageOpts {
   related?: string[]; // other prerendered packages to link to
   comparisons?: string[][]; // prerendered compare pages that include this package
   insights?: InsightsFile | null;
+  lists?: ListsFile | null; // for the category rank
 }
 
 export function prerenderHtml(
@@ -426,6 +427,8 @@ export function prerenderHtml(
       <p class="fineprint">Snapshot from the daily build${asOf ? ` of ${esc(asOf)}` : ''}, last 7 days of npm data. With JavaScript on, this page recomputes it live from the npm API.</p>
       ${peopleAnswerHtml(name, { npm: r.npmWeekly, organic: r.organicWeekly, low: r.low, high: r.high, confidence: r.confidence, tooNew: r.tooNew })}
       ${r.facts ? factsHtml(name, r.facts, opts.insights?.market, r.npmWeekly) : ''}
+      ${monthlyHtml(name, r.facts)}
+      ${categoryRankHtml(name, opts.lists, base)}
       ${chainHtml(name, opts.insights?.chains[name], base)}`
     : `<section>
         <h2 class="section-title">What this page shows</h2>

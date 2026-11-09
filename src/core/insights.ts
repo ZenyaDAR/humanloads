@@ -1,7 +1,7 @@
 // Per-package facts in plain sentences ("Is X still maintained / used?"), so each page says something only it
 // can say. Shared by the SPA and the prerender script: computed from the data both already fetch, no extra calls.
 import { addDays, median } from './estimate.ts';
-import { clip, esc, roundCount } from './html.ts';
+import { clip, esc, rangeText, roundCount } from './html.ts';
 import type { ChainStep, Estimate, MarketGrowth, RawPackageData } from './types.ts';
 
 export interface PackageFacts {
@@ -22,6 +22,17 @@ export interface PackageFacts {
   mirrorsYear: number;
   crawlersWeekly: number;
   crawlerFloor: number | null;
+  monthly?: Monthly | null; // optional: rows built before it existed have none
+}
+
+// Complete calendar months, oldest first, as parallel columns (smaller in summary.json than one object per month).
+export interface Monthly {
+  months: string[]; // YYYY-MM
+  npm: number[];
+  cleaned: number[]; // publish spikes removed
+  low: number[];
+  high: number[];
+  days: number[]; // days with downloads; outage zeros don't count
 }
 
 const DAY_MS = 86_400_000;
@@ -67,6 +78,35 @@ function adoption(est: Estimate, latest?: string): PackageFacts['adoption'] {
   return { major, isLatest: major === latest.split('.')[0], share: sum / total, topVersion: top.version, topShare: top.aboveFloor / total };
 }
 
+const MONTHLY_MIN_MONTHS = 3;
+const MONTHLY_MIN_MEDIAN = 300; // spike-free downloads a month, about 10 a day: below that the table is mostly noise
+const MONTH_MIN_DAYS = 20; // a month with fewer days of data has no per-day average worth comparing
+
+const monthEnd = (month: string) => new Date(Date.UTC(+month.slice(0, 4), +month.slice(5, 7), 0)).toISOString().slice(0, 10);
+
+// Only whole months inside the series and after the first publish: a partial month would read as a fake drop.
+function monthly(est: Estimate, created?: string): Monthly | null {
+  const first = est.daily[0]?.day;
+  const last = est.daily.at(-1)?.day;
+  if (!first || !last || est.tooNew || est.lastWeek.organic < 10) return null;
+  const m: Monthly = { months: [], npm: [], cleaned: [], low: [], high: [], days: [] };
+  for (const d of est.daily) {
+    const month = d.day.slice(0, 7);
+    if (`${month}-01` < first || monthEnd(month) > last || (created && month <= created.slice(0, 7))) continue;
+    if (m.months.at(-1) !== month) {
+      m.months.push(month);
+      for (const col of [m.npm, m.cleaned, m.low, m.high, m.days]) col.push(0);
+    }
+    const i = m.months.length - 1;
+    m.npm[i] += d.npm;
+    m.cleaned[i] += d.cleaned;
+    m.low[i] += d.low;
+    m.high[i] += d.high;
+    if (d.cleaned > 0) m.days[i]++;
+  }
+  return m.months.length >= MONTHLY_MIN_MONTHS && median(m.cleaned) >= MONTHLY_MIN_MEDIAN ? m : null;
+}
+
 export function packageFacts(data: RawPackageData, est: Estimate): PackageFacts | undefined {
   const asOf = est.daily.at(-1)?.day;
   if (!asOf) return undefined;
@@ -107,6 +147,7 @@ export function packageFacts(data: RawPackageData, est: Estimate): PackageFacts 
     mirrorsYear: est.breakdown.mirrorsTotal,
     crawlersWeekly: est.breakdown.crawlersWeekly,
     crawlerFloor: est.breakdown.crawlerFloorPerVersion,
+    monthly: monthly(est, created),
   };
 }
 
@@ -210,6 +251,53 @@ export function chainHtml(name: string, steps: ChainStep[] | undefined, base: st
         <p>Probably mostly through other packages. Each package below requires the one above it, and their weekly downloads on the matching versions line up within about 30%. This is an inference from download counts, not something npm records.</p>
         ${chainListHtml(steps, base)}
         <p>Past ${esc(steps.at(-1)!.name)} the trail splits or we can't follow it. These are still real installs, but the people running them may never have chosen ${n}. <a href="${esc(base + CHAIN_GUIDE_PATH)}">How a package ends up like this</a>.</p>
+      </section>`;
+}
+
+const monthName = (month: string) =>
+  new Date(`${month}-01T00:00:00Z`).toLocaleDateString('en-US', { year: 'numeric', month: 'short', timeZone: 'UTC' });
+const STEADY = 1.1; // busiest over quietest month below this: no "busiest month" sentence
+
+// Month by month, newest first. Change compares spike-free downloads per day, so 28- and 31-day months and outage
+// days compare fairly. Real installs are only this week's split applied to each month, which the caption says.
+export function monthlyHtml(name: string, f: PackageFacts | undefined): string {
+  const m = f?.monthly;
+  if (!m?.months.length) return '';
+  const perDay = m.cleaned.map((c, i) => (m.days[i] ? c / m.days[i] : 0));
+  const comparable = (i: number) => m.days[i] >= MONTH_MIN_DAYS && perDay[i] >= GROWTH_MIN_DAILY;
+  const rows = m.months
+    .map((month, i) => {
+      const spikes = m.npm[i] - m.cleaned[i];
+      const share = m.npm[i] ? spikes / m.npm[i] : 0;
+      const change = i > 0 && comparable(i) && comparable(i - 1) ? trend(perDay[i] / perDay[i - 1] - 1) : '—';
+      return `<tr><th scope="row">${esc(monthName(month))}</th>
+          <td class="num" data-label="npm downloads">${num(m.npm[i])}</td>
+          <td class="num" data-label="publish spikes removed">${spikes > 0 ? `${num(spikes)} <span class="ev-sub">(${pct(share)})</span>` : '0'}</td>
+          <td class="num above" data-label="real installs">${rangeText(m.low[i], m.high[i])}</td>
+          <td class="num" data-label="vs month before">${esc(change)}</td></tr>`;
+    })
+    .reverse()
+    .join('');
+
+  const ok = m.months.map((_, i) => i).filter(comparable);
+  let summary = '';
+  if (ok.length >= 2) {
+    const best = ok.reduce((a, b) => (perDay[b] > perDay[a] ? b : a));
+    const worst = ok.reduce((a, b) => (perDay[b] < perDay[a] ? b : a));
+    const holiday = m.months[worst].endsWith('-12') ? ' (the holiday season)' : '';
+    summary = perDay[best] / perDay[worst] < STEADY
+      ? 'Once publish spikes are removed, daily downloads stayed within 10% from month to month.'
+      : `The busiest month was ${monthName(m.months[best])}, with about ${num(perDay[best])} downloads a day once publish spikes are removed; the quietest was ${monthName(m.months[worst])}${holiday}, with about ${num(perDay[worst])}.`;
+  }
+  const n = esc(name);
+  return `<section class="insights monthly">
+        <h2 class="section-title">Monthly downloads of ${n}</h2>
+        ${summary ? `<p>${esc(summary)}</p>` : ''}
+        <div class="table-wrap"><table class="cmp-table">
+          <thead><tr><th scope="col">month</th><th scope="col" class="num">npm downloads</th><th scope="col" class="num">publish spikes removed</th><th scope="col" class="num">real installs</th><th scope="col" class="num">vs month before</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>
+        <p class="fineprint">Whole months through ${esc(date(monthEnd(m.months.at(-1)!)))}. Publish spikes are found day by day and summed per month. Real installs apply this week's crawler share to each month's downloads (the upper end also keeps the removed spikes), so they follow npm's curve rather than measure it. The change compares spike-free downloads per day.</p>
       </section>`;
 }
 

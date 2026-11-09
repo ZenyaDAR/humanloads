@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { LISTS, LIST_DEFS, LIST_NAMES, listLinksHtml } from '../src/core/lists.ts';
+import { LISTS, LIST_DEFS, LIST_NAMES, categoryRankHtml, listLinksHtml } from '../src/core/lists.ts';
+import { roundCount } from '../src/core/html.ts';
 import { isValidPackageName } from '../src/core/sources.ts';
 import type { FeaturedRow, ListsFile } from '../src/core/types.ts';
 import { archiveNames, buildLists, compareHtml, comparePages, curatedToRefresh, guideHtml, llmsTxt, refreshPlan } from '../scripts/data-lib.ts';
@@ -50,6 +51,34 @@ test('a curated list ranks by real installs, skips what it has no number for, an
   const enough = names!.map((n, i) => row(n, 100 - i));
   assert.equal(g.ready!(insightsOf(enough)), true);
   assert.doesNotMatch(guideHtml(SHELL, SITE, g, insightsOf(enough)), /noindex/);
+});
+
+test('category rank: the same order as the list page, only for ready lists, never the package\'s own number', () => {
+  const { names } = LIST_DEFS.find((d) => d.slug === 'best-npm-test-frameworks')!;
+  const rows = names!.map((n, i) => row(n, 1_234_567 - i * 100_000));
+  const file = insightsOf(rows);
+  const order = file.lists['best-npm-test-frameworks'].rows.map((r) => r.name);
+  const self = order[2];
+  const html = categoryRankHtml(self, file, '/');
+  assert.match(html, new RegExp(`<strong>3rd of ${order.length}</strong>`));
+  assert.match(html, new RegExp(`behind ${order[1]}[^]*ahead of ${order[3]}`));
+  assert.match(html, /href="\/lists\/best-npm-test-frameworks"/);
+  const own = rows.find((r) => r.name === self)!;
+  assert.doesNotMatch(html, new RegExp(roundCount(own.organicWeekly).replace('.', '\\.')));
+  assert.doesNotMatch(html, new RegExp(own.npmWeekly.toLocaleString('en-US')));
+  // First place: one-sided sentence, and the table still shows a full window of rows.
+  const top = categoryRankHtml(order[0], file, '/');
+  assert.match(top, /<strong>1st of/);
+  assert.doesNotMatch(top, /behind/);
+  assert.equal(top.match(/<tr[ >]/g)!.length - 1, Math.min(5, order.length)); // minus the header row
+  // Labels keep their case: "CSS", "HTTP", "Node.js" must not come out lowercased.
+  const css = LIST_DEFS.find((d) => d.slug === 'best-css-frameworks')!;
+  const cssHtml = categoryRankHtml(css.names![0], insightsOf(css.names!.map((n, i) => row(n, 1000 - i))), '/');
+  assert.match(cssHtml, new RegExp(`>${css.label}</a> ranking`));
+  // Not ready (too few rows fetched), not in any list, no file: nothing.
+  assert.equal(categoryRankHtml(self, insightsOf(rows.slice(0, 3)), '/'), '');
+  assert.equal(categoryRankHtml('unrelated', file, '/'), '');
+  assert.equal(categoryRankHtml(self, null, '/'), '');
 });
 
 test('a list page escapes what maintainers wrote and links packages and comparisons', () => {

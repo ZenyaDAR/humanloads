@@ -1,9 +1,10 @@
 import { awaitingEvidence, estimate } from '../core/estimate.ts';
 import { fetchEvidence, fetchPackageData } from '../core/sources.ts';
 import {
-  PackageNotFoundError, type Calibration, type Estimate, type Evidence, type InsightsFile, type RawPackageData, type RegistryDoc,
+  PackageNotFoundError, type Calibration, type Estimate, type Evidence, type InsightsFile, type ListsFile, type RawPackageData, type RegistryDoc,
 } from '../core/types.ts';
-import { adoptionHtml, chainHtml, factsHtml, packageFacts } from '../core/insights.ts';
+import { adoptionHtml, chainHtml, factsHtml, monthlyHtml, packageFacts } from '../core/insights.ts';
+import { LISTS_FILE, LIST_NAMES, categoryRankHtml } from '../core/lists.ts';
 import { REPO_URL, peopleAnswerHtml, deprecatedHtml, numberCardsHtml } from '../core/seo.ts';
 import { mountChart } from './chart.ts';
 import { searchBox } from './home.ts';
@@ -100,6 +101,13 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
       }),
     );
     void badge(view.querySelector<HTMLElement>('.badge-box')!, name);
+    // After paint, and only for packages in a list: lists.json is not needed for anything else on this page.
+    const rankSlot = view.querySelector<HTMLElement>('.rank-slot');
+    if (rankSlot) {
+      void fetchStatic<ListsFile>(LISTS_FILE).then((lists) => {
+        if (rankSlot.isConnected) rankSlot.outerHTML = categoryRankHtml(name, lists, BASE);
+      });
+    }
     if (total > 0) {
       mountChart(view.querySelector<HTMLElement>('.chart')!, [{ est, label: name, color: '--marker' }]);
       const more = view.querySelector<HTMLButtonElement>('.versions-more');
@@ -226,6 +234,8 @@ function body(est: Estimate, name: string, data: RawPackageData, insights: Insig
 
     ${peopleAnswerHtml(name, { npm: est.lastWeek.npm, organic: est.lastWeek.organic, low: est.lastWeek.low, high: est.lastWeek.high, confidence: est.confidence, tooNew: est.tooNew })}
     ${facts ? factsHtml(name, facts, insights?.market, est.lastWeek.npm) : ''}
+    ${monthlyHtml(name, facts)}
+    ${LIST_NAMES.includes(name) ? '<div class="rank-slot"></div>' : ''}
     ${chainHtml(name, insights?.chains[name], BASE)}
     ${breakdown(est)}
     ${versions(est, name)}`;
@@ -350,6 +360,7 @@ async function badge(host: HTMLElement, name: string): Promise<void> {
       <button type="button" class="btn btn-quiet">Copy markdown</button>
       <p class="badge-status" aria-live="polite"></p>
     </div>
+    <p class="fineprint">The badge is rebuilt nightly, so it can trail the live numbers above by a day or two.</p>
     <details class="badge-more"><summary>Show markdown</summary><code class="badge-md">${esc(md)}</code></details>`;
   const code = host.querySelector<HTMLElement>('.badge-md')!;
   const status = host.querySelector<HTMLElement>('.badge-status')!;

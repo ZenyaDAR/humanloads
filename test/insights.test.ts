@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { estimate } from '../src/core/estimate.ts';
-import { factsHtml, packageFacts, type PackageFacts } from '../src/core/insights.ts';
+import { factsHtml, monthlyHtml, packageFacts, type PackageFacts } from '../src/core/insights.ts';
 import { isIndexable, packageTitle } from '../src/core/seo.ts';
 import { prerenderHtml } from '../scripts/data-lib.ts';
 import type { FeaturedRow, RawPackageData } from '../src/core/types.ts';
@@ -90,10 +90,52 @@ test('facts: survive every real fixture, and stay JSON-safe', () => {
     const data = { name: registry.name, downloads: read('downloads.json'), registry, versionsLastWeek: read('versions.json') };
     const f = packageFacts(data, estimate(data))!;
     assert.deepEqual(JSON.parse(JSON.stringify(f)), f, dir);
-    const html = factsHtml(registry.name, f);
+    const html = factsHtml(registry.name, f) + monthlyHtml(registry.name, f);
     assert.doesNotMatch(html, /NaN|undefined|Infinity|null/, dir);
     assert.match(html, /still maintained\?/, dir);
   }
+});
+
+test('monthly: whole months only, sums match the daily series, and none before the first publish', () => {
+  const data = pkg(1000, 1000);
+  const est = estimate(data);
+  const m = packageFacts(data, est)!.monthly!;
+  // The series runs 2025-11-02..2026-10-31: November 2025 is partial, October 2026 ends on the last day.
+  assert.equal(m.months[0], '2025-12');
+  assert.equal(m.months.at(-1), '2026-10');
+  assert.equal(m.months.length, 11);
+  for (const [i, month] of m.months.entries()) {
+    const days = est.daily.filter((d) => d.day.startsWith(month));
+    assert.equal(m.npm[i], days.reduce((s, d) => s + d.npm, 0), month);
+    assert.equal(m.low[i], days.reduce((s, d) => s + d.low, 0), month);
+    assert.equal(m.days[i], days.length, month);
+  }
+  // A package first published 100 days ago: its first month is partial, and earlier months hold no real data.
+  const youngData = pkg(1000, 1000);
+  youngData.registry.time.created = `${dayAgo(100)}T00:00:00.000Z`;
+  const young = packageFacts(youngData, estimate(youngData))!.monthly!;
+  assert.equal(young.months[0], '2026-08'); // created 2026-07-23: July is partial
+  assert.ok(young.months.every((mo) => mo > dayAgo(100).slice(0, 7)));
+  // Too small to say anything month by month.
+  assert.equal(factsOf(pkg(5, 5)).monthly, null);
+});
+
+test('monthly text: newest first, an outage day does not read as a drop, old rows without the field render nothing', () => {
+  const data = pkg(1000, 1000);
+  data.downloads.find((d) => d.day === '2026-09-15')!.downloads = 0;
+  const f = factsOf(data);
+  assert.equal(f.monthly!.days[f.monthly!.months.indexOf('2026-09')], 29);
+  const html = monthlyHtml('p', f);
+  assert.ok(html.indexOf('Oct 2026') < html.indexOf('Dec 2025'));
+  assert.doesNotMatch(html, /up \d|down \d/); // per-day change on a flat series, outage day left out
+  assert.match(html, /within 10%/);
+  // A quiet December is named as the holiday season, not left to read as a decline.
+  const dip = pkg(1000, 1000);
+  for (const d of dip.downloads) if (d.day.startsWith('2025-12')) d.downloads = 500;
+  assert.match(monthlyHtml('p', factsOf(dip)), /quietest was Dec 2025 \(the holiday season\)/);
+  assert.equal(monthlyHtml('p', { ...f, monthly: undefined }), '');
+  assert.equal(monthlyHtml('p', undefined), '');
+  assert.doesNotMatch(monthlyHtml('<b>', f), /<b>/);
 });
 
 test('facts text: verdict follows the release age and deprecation', () => {
@@ -127,6 +169,6 @@ test('indexing: pages under 1,000 real installs a week, or without numbers, are 
 
 test('prerender: facts appear on the page, and old summaries without facts still render', () => {
   const f = factsOf(pkg(1000, 1000));
-  assert.match(prerenderHtml(SHELL, 'p', row(5000, f), 'https://example.test/'), /Is p still maintained\?[\s\S]*Is p still used\?/);
+  assert.match(prerenderHtml(SHELL, 'p', row(5000, f), 'https://example.test/'), /Is p still maintained\?[\s\S]*Is p still used\?[\s\S]*Monthly downloads of p/);
   assert.doesNotMatch(prerenderHtml(SHELL, 'p', row(5000), 'https://example.test/'), /still maintained/);
 });

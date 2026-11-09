@@ -309,6 +309,50 @@ function listGuide(def: ListDef): Guide<ListsFile> {
 
 export const LISTS: Guide<ListsFile>[] = LIST_DEFS.map(listGuide);
 
+const ordinal = (n: number) => {
+  const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th');
+  return `${n}${s}`;
+};
+const RANK_WINDOW = 2; // neighbours shown on each side
+
+// "3rd of 8 test frameworks", read straight from the ranked list so it always matches the list page. Only lists that
+// are ready (enough rows fetched), and never the package's own number: the SPA shows live numbers above, this is a
+// nightly snapshot, and the two would disagree.
+export function categoryRankHtml(name: string, file: ListsFile | null | undefined, base: string): string {
+  const parts = LIST_DEFS.flatMap((def, k) => {
+    const rows = file?.lists?.[def.slug]?.rows;
+    const i = rows?.findIndex((r) => r.name === name) ?? -1;
+    if (!def.names?.includes(name) || !rows || i < 0 || !LISTS[k].ready!(file ?? null)) return [];
+    const href = esc(`${base}lists/${def.slug}`);
+    // Names only: the table below carries the numbers, as ranges.
+    const [above, below] = [rows[i - 1], rows[i + 1]];
+    const near = [above && `behind ${esc(above.name)}`, below && `ahead of ${esc(below.name)}`].filter(Boolean).join(' and ');
+    // Same number of rows wherever the package sits, as far as the list allows.
+    const size = 2 * RANK_WINDOW + 1;
+    const start = Math.max(0, Math.min(i - RANK_WINDOW, rows.length - size));
+    const window = rows.slice(start, start + size);
+    const table = `<div class="table-wrap"><table class="cmp-table">
+          <thead><tr><th scope="col">package</th><th scope="col" class="num">real installs / week</th><th scope="col" class="num">npm / week</th></tr></thead>
+          <tbody>${window
+            .map((r, j) =>
+              r.name === name
+                ? `<tr class="is-self"><th scope="row">${start + j + 1}. ${esc(r.name)}</th><td class="num" data-label="real installs / week">this package</td><td class="num" data-label="npm / week">—</td></tr>`
+                : `<tr><th scope="row">${start + j + 1}. <a href="${esc(base + r.name)}">${esc(r.name)}</a></th><td class="num above" data-label="real installs / week">${rangeText(r.low, r.high)}</td><td class="num" data-label="npm / week">${count(r.npmWeekly)}</td></tr>`,
+            )
+            .join('')}</tbody>
+        </table></div>`;
+    // The label as written: lowercasing it would break CSS, HTTP, React, Node.js.
+    return [`<p>In last night's <a href="${href}">${esc(def.label)}</a> ranking, ${esc(name)} is <strong>${ordinal(i + 1)} of ${rows.length}</strong> by real installs${near ? `, ${near}` : ''}.</p>
+        ${table}
+        <p class="fineprint">From the nightly build.${asOf(rows)} <a href="${href}">See the full ranking <span aria-hidden="true">→</span></a></p>`];
+  });
+  if (!parts.length) return '';
+  return `<section class="insights rank">
+        <h2 class="section-title">How does ${esc(name)} rank?</h2>
+        ${parts.join('\n        ')}
+      </section>`;
+}
+
 // Links to the lists, on the home page in both static and app markup.
 export function listLinksHtml(base: string): string {
   return `<section class="cmp-links-sec">
