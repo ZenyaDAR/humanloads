@@ -29,6 +29,8 @@ permissions:
 # all derive from it. Defaults to site.config.ts; a repository variable SITE_URL overrides it.
 env:
   SITE_URL: ${{ vars.SITE_URL }}
+  # The badge service's URL (server/, deployed by Railway from main). Unset: README badges only for tracked packages.
+  BADGE_API_URL: ${{ vars.BADGE_API_URL }}
 
 # One deployment at a time; let an in-flight production deploy finish.
 concurrency:
@@ -41,8 +43,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90 # a stuck API must not hold the runner for the 6-hour default
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      # Actions are pinned to commit SHAs: a moved tag can't change what runs next to BADGE_SYNC_TOKEN.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false # nothing here pushes; the GitHub token needn't stay on disk
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -56,7 +61,7 @@ jobs:
       - id: data
         run: echo "key=data-$(date -u +%F)-${{ hashFiles('src/core/estimate.ts', 'src/core/insights.ts', 'src/core/sources.ts', 'src/core/lists.ts', 'scripts/build-data.mjs', 'scripts/data-lib.ts', 'data/seeds.json', 'data/blocklist.json', 'data/compare.json') }}" >> "$GITHUB_OUTPUT"
       - id: cache
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             public/data
@@ -69,8 +74,11 @@ jobs:
           github.event_name != 'pull_request' &&
           (github.event_name == 'schedule' || inputs.refresh || steps.cache.outputs.cache-matched-key == '')
         run: npm run data
+        env:
+          # Reads the badge service's request log (GET /requested). Unset: the badge list just stays as it was.
+          BADGE_SYNC_TOKEN: ${{ secrets.BADGE_SYNC_TOKEN }}
       - if: steps.fetch.outcome == 'success'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             public/data
@@ -79,7 +87,7 @@ jobs:
 
       - run: npm run build
       - if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: dist
 
@@ -95,7 +103,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
       # Tell Bing and other IndexNow engines about the URLs. Not on the nightly refresh: resubmitting everything
       # every day reads as spam. The key is public by design and proven by public/<key>.txt.
       - if: github.event_name != 'schedule'

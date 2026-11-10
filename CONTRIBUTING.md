@@ -4,8 +4,11 @@ Thanks for helping. Small, focused pull requests are easiest to review.
 
 ## Get a badge for your package
 
-Add the package name to [`data/tracked.json`](data/tracked.json) and open a pull request. The badge appears after
-the next daily build. That is the whole change; no code needed.
+Open the package's page on [humanloads.dev](https://humanloads.dev) and copy the markdown under "Add a badge to your
+README". It works for any package on npm; no pull request needed.
+
+For a permanent static badge file (`badges/<name>.json`, refreshed every night and never dropped), add the package
+name to [`data/tracked.json`](data/tracked.json) and open a pull request.
 
 ## An estimate looks wrong
 
@@ -20,6 +23,12 @@ Requires Node 22.18 or newer.
 npm i
 npm run data -- --limit 60   # optional: live data for the homepage cards and badges (network)
 npm run dev
+```
+
+The badge service (`server/`) runs without a build step and needs no npm packages:
+
+```sh
+node server/index.ts         # http://localhost:8787/badge/<name>; settings at the top of the file
 ```
 
 Before opening a pull request:
@@ -49,6 +58,11 @@ npm run build
 - Pushes that only touch Markdown or GitHub templates don't deploy.
 - The site URL is one setting, `SITE_URL` (`site.config.ts`, overridable by a repository variable). Canonical links,
   Open Graph, sitemap, robots.txt, llms.txt, JSON-LD, badges and the Vite base path all derive from it.
+- The badge service (`server/`) deploys to Railway from `main` (`railway.json`), as one instance with a volume for its
+  SQLite file. The site links badges to it when the repository variable `BADGE_API_URL` is set. Each night
+  `npm run data` reads its request log (`GET /requested`, with the `BADGE_SYNC_TOKEN` secret, the same value as the
+  service's variable) and keeps the badge list in `summary.json`: names requested on two or more days join it, and
+  leave after 45 days without a request.
 - GitHub disables scheduled workflows after 60 days without repository activity; a push or a manual run restarts them.
 - The calibration canary (`canary/`, `.github/workflows/canary.yml`) runs only when the repository variable
   `CANARY_ENABLED` is `true`. The first publish needs an `NPM_TOKEN` secret; after that, configure npm trusted

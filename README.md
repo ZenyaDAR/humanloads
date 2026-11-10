@@ -7,7 +7,7 @@
 [![Website](https://img.shields.io/website?url=https%3A%2F%2Fhumanloads.dev&label=humanloads.dev&up_message=online)](https://humanloads.dev)
 [![Deploy](https://github.com/ZenyaDAR/humanloads/actions/workflows/deploy.yml/badge.svg)](https://github.com/ZenyaDAR/humanloads/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![No backend](https://img.shields.io/badge/backend-none-brightgreen.svg)](#privacy)
+[![Static site](https://img.shields.io/badge/site-static-brightgreen.svg)](#privacy)
 [![No cookies](https://img.shields.io/badge/cookies-none-brightgreen.svg)](#privacy)
 
 [![humanloads: npm counts every tarball fetch, we estimate the real installs](public/og.png)](https://humanloads.dev)
@@ -65,30 +65,44 @@ Show real installs next to your download count:
 [![real installs/week](https://img.shields.io/endpoint?url=https://humanloads.dev/badges/<name>.json)](https://humanloads.dev/<name>)
 ```
 
-For a scoped package, `@scope/name` becomes `scope__name` in the badge URL. Badges are rebuilt daily for
-packages listed in [`data/tracked.json`](data/tracked.json): add yours with a one-line pull request.
+For a scoped package, `@scope/name` becomes `scope__name` in the badge URL. These static badges exist for the
+packages listed in [`data/tracked.json`](data/tracked.json), refreshed daily and never dropped: add yours with a
+one-line pull request.
+
+Any other npm package can have a badge too: its page on the site gives you the markdown. That badge is served by
+a small service ([`server/`](server/)) that runs the same model. A badge requested on two or more days joins the
+nightly build's badge list, refreshed in a rotation (every day or few days); one nobody requests for 45 days leaves
+it and is computed again on its next request. The first request for a brand-new package can read "calculating…" for a
+few minutes. The service runs as a single instance; its limits and setup are documented in
+[`server/index.ts`](server/index.ts).
 
 ## Open data
 
 The daily numbers are published as JSON, free to use:
 
 - [`/data/summary.json`](https://humanloads.dev/data/summary.json): the catalog, part of which is refreshed each
-  night (npm weekly count, real installs, range, noise share, confidence, date of that row).
+  night (npm weekly count, real installs, range, noise share, confidence, date of that row), and the badge list.
+- [`/badges/all.json`](https://humanloads.dev/badges/all.json): the badge of every recently refreshed package, by name.
 - [`/data/featured.json`](https://humanloads.dev/data/featured.json): the homepage list.
 - [`/data/insights.json`](https://humanloads.dev/data/insights.json): the most downloaded deprecated packages, dependency trails and median growth across the catalog.
 - [`/llms.txt`](https://humanloads.dev/llms.txt): a summary of the site for AI assistants.
 
 ## Privacy
 
-humanloads is a static site with no backend, no accounts and no cookies. Your browser talks to public APIs
+humanloads is a static site with no accounts and no cookies. Your browser talks to public APIs
 (npm, npms.io for search suggestions, ecosyste.ms, jsDelivr, GitHub) directly; fonts come from Google Fonts. Page views are counted with
 [Cloudflare Web Analytics](https://www.cloudflare.com/web-analytics/), which uses no cookies and does not
 fingerprint or track visitors across sites.
 
+The badge service behind README badges sees requests from shields.io, not from the people reading a README. It
+stores package names, their badges and the days each badge was requested. An address shows up in its log only when it
+goes over a rate limit.
+
 ## Built with
 
 TypeScript and [Vite](https://vite.dev), [Rough.js](https://roughjs.com) for the hand-drawn charts, hosted on
-GitHub Pages. One runtime dependency, tested with Node's built-in test runner.
+GitHub Pages. One runtime dependency, tested with Node's built-in test runner. The badge service is plain Node with
+its built-in SQLite, on [Railway](https://railway.com).
 
 ## Contributing
 

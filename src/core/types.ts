@@ -197,6 +197,8 @@ export interface ShieldsBadge {
   label: string;
   message: string;
   color: string;
+  isError?: boolean; // shields draws it as an error and won't let a viewer override the color
+  cacheSeconds?: number; // how long shields keeps it; values below shields' own minimum are ignored
 }
 
 export class PackageNotFoundError extends Error {

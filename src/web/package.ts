@@ -1,15 +1,16 @@
 import { awaitingEvidence, estimate } from '../core/estimate.ts';
 import { fetchEvidence, fetchPackageData } from '../core/sources.ts';
 import {
-  PackageNotFoundError, type Calibration, type Estimate, type Evidence, type InsightsFile, type ListsFile, type RawPackageData, type RegistryDoc,
+  PackageNotFoundError, type Calibration, type Estimate, type Evidence, type InsightsFile, type ListsFile, type RawPackageData, type RegistryDoc, type ShieldsBadge,
 } from '../core/types.ts';
+import { badgeOf } from '../core/badge.ts';
 import { adoptionHtml, chainHtml, factsHtml, monthlyHtml, packageFacts } from '../core/insights.ts';
 import { LISTS_FILE, LIST_NAMES, categoryRankHtml } from '../core/lists.ts';
 import { REPO_URL, peopleAnswerHtml, deprecatedHtml, numberCardsHtml } from '../core/seo.ts';
 import { mountChart } from './chart.ts';
 import { searchBox } from './home.ts';
 import {
-  BASE, SITE_URL, esc, fetchStatic, fmt, fmtCompact, METHODOLOGY_URL, navigate, pkgHref, safeName, safeUrl, setPageMeta, timeAgo,
+  BADGE_API, BASE, SITE_URL, esc, fetchStatic, fmt, fmtCompact, METHODOLOGY_URL, navigate, pkgHref, safeName, safeUrl, setPageMeta, timeAgo,
 } from './util.ts';
 import { compareLinksHtml } from '../core/seo.ts';
 import COMPARE_PAIRS from '../../data/compare.json';
@@ -100,7 +101,9 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
         onPick: (other) => other !== name && navigate(`${BASE}compare/${name},${other}`),
       }),
     );
-    void badge(view.querySelector<HTMLElement>('.badge-box')!, name);
+    // The badge preview follows the estimate: evidence below can raise confidence, as the badge service does.
+    let latest = est;
+    void badge(view.querySelector<HTMLElement>('.badge-box')!, name, () => latest);
     // After paint, and only for packages in a list: lists.json is not needed for anything else on this page.
     const rankSlot = view.querySelector<HTMLElement>('.rank-slot');
     if (rankSlot) {
@@ -124,12 +127,15 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
       const ev = await fetchEvidence(name, data.registry);
       if (!view.isConnected) return;
       fillEvidence(evHost, ev);
+      latest = estimate(data, { calibration: cal, evidence: ev });
       const cardsEl = view.querySelector('.cards');
       if (cardsEl) {
         const open = cardsEl.querySelector<HTMLDetailsElement>('.why')?.open; // keep the disclosure as the reader left it
-        cardsEl.outerHTML = cards(estimate(data, { calibration: cal, evidence: ev }));
+        cardsEl.outerHTML = cards(latest);
         if (open) view.querySelector<HTMLDetailsElement>('.why')!.open = true;
       }
+      const live = view.querySelector('.badge-box .shield[data-live]');
+      if (live) live.outerHTML = shieldHtml(badgeOf(latest), true);
     } catch {
       const cardsEl = view.querySelector('.cards');
       if (cardsEl) cardsEl.outerHTML = cards(est); // nothing more is coming, so stop saying "checking"
@@ -331,36 +337,40 @@ function fillEvidence(host: HTMLElement, ev: Evidence): void {
 
 // ---------- README badge ----------
 
-async function badge(host: HTMLElement, name: string): Promise<void> {
-  const index = await fetchStatic<string[]>('badges/index.json');
+function shieldHtml(data: ShieldsBadge, live = false): string {
+  return `<span class="shield" role="img"${live ? ' data-live' : ''} aria-label="Badge preview: ${esc(data.label)} ${esc(data.message)}">
+    <span class="shield-l">${esc(data.label)}</span><span class="shield-r shield-${esc(data.color)}">${esc(data.message)}</span></span>`;
+}
+
+async function badge(host: HTMLElement, name: string, est: () => Estimate): Promise<void> {
+  // With the badge service every link points at it: it serves any package, and its URL never changes when a package
+  // enters or leaves the catalog. Without it, only tracked packages have a static file that is never dropped.
+  // Membership by exact name: "@a/b" and the unscoped "a__b" share a file name.
+  const tracked = BADGE_API ? null : await fetchStatic<string[]>('badges/index.json');
   if (!host.isConnected) return;
   host.hidden = false;
-  if (!Array.isArray(index) || !index.includes(name)) {
+  if (!BADGE_API && !(Array.isArray(tracked) && tracked.includes(name))) {
     host.innerHTML = `
       <h2 class="section-title">Want a badge?</h2>
       <p class="badge-ask">README badges are built for tracked packages. Add <code>${esc(name)}</code> to the list with a
         <a href="${TRACKED_URL}">one-line pull request</a>.</p>`;
     return;
   }
-  const json = `${SITE_URL}badges/${safeName(name)}.json`;
+  const json = BADGE_API ? `${BADGE_API}badge/${name}` : `${SITE_URL}badges/${safeName(name)}.json`;
   const img = `https://img.shields.io/endpoint?url=${encodeURIComponent(json)}`;
   const md = `[![real installs per week](${img})](${SITE_URL}${name})`;
-  // The preview is drawn from our own badge JSON (the same file shields.io reads), so it shows
-  // the real numbers even before a deploy and costs no third-party request.
-  const data = await fetchStatic<{ label: string; message: string; color: string }>(`badges/${safeName(name)}.json`);
-  if (!host.isConnected) return;
-  const preview = data
-    ? `<span class="shield" role="img" aria-label="Badge preview: ${esc(data.label)} ${esc(data.message)}">
-        <span class="shield-l">${esc(data.label)}</span><span class="shield-r shield-${esc(data.color)}">${esc(data.message)}</span></span>`
-    : '';
+  // The preview costs no request: the number this page computed with the same model as the badge (redrawn once
+  // evidence settles confidence).
   host.innerHTML = `
     <h2 class="section-title">Add a badge to your README</h2>
     <div class="badge-row">
-      ${preview}
+      ${shieldHtml(badgeOf(est()), true)}
       <button type="button" class="btn btn-quiet">Copy markdown</button>
       <p class="badge-status" aria-live="polite"></p>
     </div>
-    <p class="fineprint">The badge is rebuilt nightly, so it can trail the live numbers above by a day or two.</p>
+    <p class="fineprint">The badge updates every day or few days, so it can trail the live numbers above.${
+      BADGE_API ? ' A brand-new badge may read “calculating…” for a few minutes.' : ''
+    }</p>
     <details class="badge-more"><summary>Show markdown</summary><code class="badge-md">${esc(md)}</code></details>`;
   const code = host.querySelector<HTMLElement>('.badge-md')!;
   const status = host.querySelector<HTMLElement>('.badge-status')!;

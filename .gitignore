@@ -4,6 +4,8 @@ dist/
 .nervegraph/
 public/data/
 public/badges/
+*.sqlite
+*.sqlite-*
 .mcp.json
 .playguard/
 docs/PLAN.md

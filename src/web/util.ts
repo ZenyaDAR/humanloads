@@ -7,6 +7,8 @@ export const BASE = import.meta.env.BASE_URL; // path part of SITE_URL, e.g. '/'
 
 // The public site, for links that must work outside this browser (badges, canonical). Set by vite.config.ts.
 export const SITE_URL: string = import.meta.env.VITE_SITE_URL;
+// The badge service (server/), with a trailing slash; '' when none is configured. Set by vite.config.ts.
+export const BADGE_API: string = import.meta.env.VITE_BADGE_API_URL;
 
 export const METHODOLOGY_URL = BASE + METHODOLOGY_PATH;
 
@@ -16,10 +18,7 @@ export function pkgHref(name: string): string {
   return BASE + name;
 }
 
-// "@scope/name" -> "scope__name": the file name the badge job writes.
-export function safeName(name: string): string {
-  return name.replace(/^@/, '').replace('/', '__');
-}
+export { safeName } from '../core/badge.ts';
 
 // In-app navigation: main.ts listens for this event and re-renders.
 export function navigate(path: string): void {

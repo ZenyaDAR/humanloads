@@ -1,9 +1,10 @@
 // Pure helpers for scripts/build-data.mjs and scripts/prerender.mjs, kept apart from those scripts' top-level
 // network/file work so tests can import them. Only erasable TS syntax: Node runs this file by type stripping.
 import semver from 'semver';
-import type { Calibration, ChainStep, DeprecatedRow, FeaturedRow, InsightsFile, ListData, ListRow, ListsFile, MarketGrowth, RawPackageData, ShieldsBadge } from '../src/core/types.ts';
+import type { Calibration, ChainStep, DeprecatedRow, FeaturedRow, InsightsFile, ListData, ListRow, ListsFile, MarketGrowth, RawPackageData } from '../src/core/types.ts';
 import { addDays, median } from '../src/core/estimate.ts';
 import { esc } from '../src/core/html.ts';
+import { badgeFor, compactCount, safeName } from '../src/core/badge.ts';
 import {
   FILTERED_NOTE, HOME_DESCRIPTION, HOME_PITCH, HOME_TITLE, NOISE_CAPTION, NOISIEST_CAPTION, NOISIEST_NOTE, NOISIEST_TITLE, REPO_LINK_HTML, REPO_URL, SITE_NAME, compareDescription, compareLinksHtml,
   HOME_COMPARE_SIZE, comparePath, compareTitle, deprecatedHtml, isIndexable, noiseBar, noiseText, numberCardsHtml, packageDescription, peopleAnswerHtml, popularHtml, homeFaqHtml, packageTitle, rangeText, roundCount,
@@ -216,12 +217,19 @@ export function buildInsights(rows: FeaturedRow[], generated: string): InsightsF
 
 // What a previous summary.json gives this build. With another model version its numbers can't be mixed with new ones, but
 // its names stay `pending`: their pages keep working with generic text until they get their turn, instead of turning into 404s.
-export function readPrevious(body: unknown, model: string): { rows: Record<string, FeaturedRow>; pending: string[]; archived: string[] } {
-  const b = body as { model?: string; packages?: Record<string, FeaturedRow>; pending?: string[]; archived?: string[] } | null;
+export function readPrevious(
+  body: unknown,
+  model: string,
+): { rows: Record<string, FeaturedRow>; pending: string[]; archived: string[]; badgeList: BadgeList } {
+  const b = body as { model?: string; packages?: Record<string, FeaturedRow>; pending?: string[]; archived?: string[]; badgeList?: BadgeList } | null;
   if (!b?.packages || typeof b.packages !== 'object') throw new Error('summary.json has no packages');
   const pending = Array.isArray(b.pending) ? b.pending : [];
   const archived = Array.isArray(b.archived) ? b.archived : [];
-  return b.model === model ? { rows: b.packages, pending, archived } : { rows: {}, pending: [...new Set([...Object.keys(b.packages), ...pending])], archived };
+  // The badge list doesn't depend on the model: it survives a model change.
+  const badgeList = b.badgeList && typeof b.badgeList === 'object' && !Array.isArray(b.badgeList) ? b.badgeList : {};
+  return b.model === model
+    ? { rows: b.packages, pending, archived, badgeList }
+    : { rows: {}, pending: [...new Set([...Object.keys(b.packages), ...pending])], archived, badgeList };
 }
 
 // Names that left the catalog (over the cap, or not refreshed for weeks) keep a page without numbers and out of search
@@ -308,21 +316,78 @@ export function mergeCatalog(
   return Object.fromEntries(rows);
 }
 
-export function compactCount(n: number): string {
-  const short = (x: number, unit: string) => `${(Math.round(x * 10) / 10).toString()}${unit}`;
-  if (n >= 999_950) return short(n / 1e6, 'M');
-  if (n >= 1000) return short(n / 1e3, 'k');
-  return String(n);
+export { badgeFor, compactCount, safeName };
+
+// ---------- badge list: packages people actually put a badge on ----------
+
+// The badge service (server/) logs every badge request. Each night the build takes the names requested on two or more
+// UTC days (a real README badge is fetched by shields every hour; a one-off probe is not), refreshes them in a rotation
+// with its own nightly budget, and drops a name nobody requested for 45 days. The list lives in summary.json, so
+// nothing is committed.
+// ponytail: fixed numbers, sized for today's npm rate limits and the 90-minute job. Measure a full run before raising them.
+export const BADGE_PROMOTE_DAYS = 2;
+export const BADGE_PROMOTE_PER_NIGHT = 50; // so a flood of requested names joins slowly, whatever the log says
+export const BADGE_KEEP_DAYS = 45;
+export const BADGE_LIST_MAX = 3000;
+export const BADGE_NIGHTLY = 300; // badge-list packages refreshed per night: the whole list within ten nights
+export const BADGE_FRESH_DAYS = 10; // badges/all.json carries rows refreshed within this; the service computes the rest
+
+export type BadgeEntry = { since: number; lastSeen: number; days: number }; // ms timestamps; distinct days requested
+export type BadgeList = Record<string, BadgeEntry>;
+
+const dayOf = (ms: number) => Math.floor(ms / DAY_MS);
+
+export function mergeBadgeList(previous: BadgeList, requested: unknown, now: number, usable: (name: string) => boolean): BadgeList {
+  // No prototype: "constructor" and "toString" are real package names.
+  const out: BadgeList = Object.create(null);
+  // previous comes from the published summary.json and the log from a server on the internet: every field is
+  // checked, and no timestamp may be in the future.
+  const num = (x: unknown, fallback: number) => (typeof x === 'number' && Number.isFinite(x) ? x : fallback);
+  for (const [name, e] of Object.entries(previous ?? {})) {
+    if (!usable(name) || typeof e?.lastSeen !== 'number' || !Number.isFinite(e.lastSeen)) continue;
+    out[name] = { since: Math.min(num(e.since, now), now), lastSeen: Math.min(e.lastSeen, now), days: Math.max(1, num(e.days, BADGE_PROMOTE_DAYS)) };
+  }
+  const candidates: [string, BadgeEntry][] = [];
+  for (const r of Array.isArray(requested) ? requested : []) {
+    if (typeof r?.name !== 'string' || !usable(r.name) || !Number.isFinite(r.lastSeen) || !Number.isFinite(r.days)) continue;
+    const lastSeen = Math.min(r.lastSeen, now);
+    const known = Object.hasOwn(out, r.name) ? out[r.name] : undefined;
+    if (known) {
+      known.lastSeen = Math.max(known.lastSeen, lastSeen);
+      known.days = Math.max(known.days, r.days);
+    } else if (r.days >= BADGE_PROMOTE_DAYS) candidates.push([r.name, { since: now, lastSeen, days: r.days }]);
+  }
+  // Promotions per night are capped: the names asked for on the most days first.
+  const rank = (a: [string, BadgeEntry], b: [string, BadgeEntry]) =>
+    dayOf(b[1].lastSeen) - dayOf(a[1].lastSeen) || b[1].days - a[1].days || a[0].localeCompare(b[0]);
+  for (const [name, e] of candidates.sort((a, b) => b[1].days - a[1].days || rank(a, b)).slice(0, BADGE_PROMOTE_PER_NIGHT)) out[name] = e;
+  // Past the cap, the names requested longest ago go first. By day, not by millisecond: whoever asks first after
+  // midnight UTC must not outrank a badge viewed later the same day.
+  const kept = Object.entries(out)
+    .filter(([, e]) => now - e.lastSeen <= BADGE_KEEP_DAYS * DAY_MS)
+    .sort(rank)
+    .slice(0, BADGE_LIST_MAX);
+  return Object.fromEntries(kept.sort(([a], [b]) => a.localeCompare(b)));
 }
 
-const COLORS = { high: 'brightgreen', medium: 'yellow', low: 'lightgrey' } as const;
-
-export function badgeFor(row: Pick<FeaturedRow, 'organicWeekly' | 'confidence' | 'tooNew'>): ShieldsBadge {
-  return { schemaVersion: 1, label: 'real installs/week', message: row.tooNew ? 'too new' : `≈ ${compactCount(row.organicWeekly)}`, color: COLORS[row.confidence] };
+// Tonight's share of the badge list: names with no row first, then the stalest, up to `budget`.
+export function badgeRefreshPlan(names: string[], previous: Record<string, FeaturedRow>, budget: number): string[] {
+  const updated = (n: string) => (Object.hasOwn(previous, n) ? (previous[n].updated ?? '') : '');
+  return [...names].sort((a, b) => updated(a).localeCompare(updated(b)) || a.localeCompare(b)).slice(0, budget);
 }
 
-// "@scope/name" -> "scope__name": a flat file name for badges and fixtures.
-export const safeName = (name: string): string => name.replace(/^@/, '').replace('/', '__');
+// Static badge files, one per name. "@a/b" and the unscoped "a__b" share a file name: the first name wins and the
+// other is left out (and logged), so a file never carries another package's number.
+export function badgeFiles(names: string[]): { files: Map<string, string>; clashes: string[] } {
+  const files = new Map<string, string>();
+  const clashes: string[] = [];
+  for (const name of names) {
+    const file = safeName(name);
+    if (files.has(file)) clashes.push(name);
+    else files.set(file, name);
+  }
+  return { files, clashes };
+}
 
 // ---------- prerender: static HTML for crawlers, replaced by the SPA when it boots ----------
 
@@ -842,7 +907,7 @@ ${GUIDES.map((g) => `- [${g.title.replace(/ · .*$/, '')}](${site}${g.path})`).j
 - [featured.json](${site}data/featured.json): examples, and noisiest: settled packages with the most noise in npm's count
 - [insights.json](${site}data/insights.json): deprecated (the most downloaded deprecated packages), chains (dependency trails), market (median growth)
 - [lists.json](${site}data/lists.json): the rows behind the ranked lists, by list slug
-- [badges/index.json](${site}badges/index.json): packages with a shields.io endpoint badge at ${site}badges/<name>.json (\`@scope/name\` is written \`scope__name\`)
+- [badges/index.json](${site}badges/index.json): tracked packages, each with a permanent shields.io endpoint badge at ${site}badges/<name>.json (\`@scope/name\` is written \`scope__name\`). Any other package's page offers its README badge.
 
 ## Package pages
 

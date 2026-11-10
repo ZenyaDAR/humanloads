@@ -2,7 +2,7 @@ blank_issues_enabled: true
 contact_links:
   - name: Get a badge for your package
     url: https://github.com/ZenyaDAR/humanloads/blob/main/CONTRIBUTING.md#get-a-badge-for-your-package
-    about: Badges are a one-line pull request to data/tracked.json, no issue needed.
+    about: Any package's page on humanloads.dev gives you its badge, no issue needed.
   - name: Report a security problem
     url: https://github.com/ZenyaDAR/humanloads/security/advisories/new
     about: Please report vulnerabilities privately.

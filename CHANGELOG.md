@@ -9,6 +9,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (Added
 
 ### Added
 
+- README badges for any package on npm, not only the ones in `data/tracked.json`: every package page offers its badge
+  markdown. A small badge service (`server/`, on Railway) answers catalog packages from the nightly build and computes
+  any other package on its first request. Packages whose badge is requested on two or more days join a badge list the
+  nightly build refreshes in a rotation; one nobody requests for 45 days leaves it. The service limits new
+  computations per client and overall, never limits badges it already has, and keeps no data about readers.
+- New data file `badges/all.json`: the badge of every recently refreshed package; `summary.json` gains `badgeList`.
 - Ranked lists under `/lists/`: the most downloaded npm packages, and the best packages by category, ordered by real installs.
 - Comparison pages for 100 pairs, up from 32.
 - A list of the [most downloaded deprecated npm packages](https://humanloads.dev/docs/deprecated-npm-packages), with each maintainer's own message.
@@ -19,6 +25,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (Added
 
 ### Changed
 
+- Static badge files (`badges/<name>.json`) are written only for `data/tracked.json`, so a link to one never starts
+  returning 404. Two names that map to the same file (`@a/b` and `a__b`) no longer share it.
+- The badge preview on a package page follows the page's own estimate, including the confidence that evidence settles.
+- The nightly build stops starting new fetches after an hour and writes what it has, rather than hitting the job timeout.
+- Workflow actions are pinned to commit SHAs.
 - A package that leaves the catalog keeps its page, out of search indexes, instead of turning into a 404. So does a comparison page waiting for numbers.
 - Comparison packages are refreshed in rotation rather than every night, so the rest of the catalog keeps growing. Their pages show the date of their oldest row.
 - The number is now called **real installs**: npm's count without publish spikes and the crawler floor. CI, builds and dependency

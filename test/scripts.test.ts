@@ -142,9 +142,9 @@ test('refreshPlan: an object-prototype name is an ordinary new name', () => {
 
 test('readPrevious: rows carry over only within a model version; other names stay pending', () => {
   const rows = catalogOf(inCatalog('a', '2026-11-01'));
-  assert.deepEqual(readPrevious({ model: 'v2', packages: rows, pending: ['b'], archived: ['c'] }, 'v2'), { rows, pending: ['b'], archived: ['c'] });
-  assert.deepEqual(readPrevious({ model: 'v1', packages: rows, pending: ['b'], archived: ['c'] }, 'v2'), { rows: {}, pending: ['a', 'b'], archived: ['c'] });
-  assert.deepEqual(readPrevious({ packages: rows }, 'v2'), { rows: {}, pending: ['a'], archived: [] }); // the format before versions
+  assert.deepEqual(readPrevious({ model: 'v2', packages: rows, pending: ['b'], archived: ['c'] }, 'v2'), { rows, pending: ['b'], archived: ['c'], badgeList: {} });
+  assert.deepEqual(readPrevious({ model: 'v1', packages: rows, pending: ['b'], archived: ['c'] }, 'v2'), { rows: {}, pending: ['a', 'b'], archived: ['c'], badgeList: {} });
+  assert.deepEqual(readPrevious({ packages: rows }, 'v2'), { rows: {}, pending: ['a'], archived: [], badgeList: {} }); // the format before versions
 });
 
 test('readPrevious: a file without packages is an error, not an empty catalog', () => {
