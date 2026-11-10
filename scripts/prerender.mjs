@@ -10,7 +10,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isValidPackageName } from '../src/core/sources.ts';
-import { customDomain, resolveSiteUrl } from '../site.config.ts';
+import { customDomain, resolveBadgeApiUrl, resolveSiteUrl } from '../site.config.ts';
 import { METHODOLOGY_PATH } from '../src/core/methodology.ts';
 import { GUIDES } from '../src/core/guides.ts';
 import { LISTS } from '../src/core/lists.ts';
@@ -97,7 +97,7 @@ await writeFile(new URL('sitemap.xml', dist), sitemapXml(
 await writeFile(new URL('robots.txt', dist), robotsTxt(SITE));
 await writeFile(
   new URL('llms.txt', dist),
-  llmsTxt(SITE, indexable.map((name) => ({ name, row: packages[name] })), summary?.generated, pairs, readyLists),
+  llmsTxt(SITE, indexable.map((name) => ({ name, row: packages[name] })), summary?.generated, pairs, readyLists, resolveBadgeApiUrl()),
 );
 const domain = customDomain(SITE);
 if (domain) await writeFile(new URL('CNAME', dist), domain + '\n');

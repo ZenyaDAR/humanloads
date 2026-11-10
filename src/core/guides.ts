@@ -51,6 +51,10 @@ export const HOME_FAQ: [string, string][] = [
     'What do weekly downloads on npm mean?',
     'The number of times the package tarball was served in the last 7 days. It counts every fetch, including mirrors, crawlers and CI, so it is not a number of users.',
   ],
+  [
+    'Can I add a real installs badge to my README?',
+    'Yes, for any npm package. Open the package\'s page here and copy the markdown under "Add a badge to your README". The exact URL format is in llms.txt.',
+  ],
 ];
 
 const check = (base: string) => `<p class="method"><a href="${base}">Check a package <span aria-hidden="true">→</span></a></p>`;

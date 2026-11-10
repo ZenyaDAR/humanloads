@@ -464,6 +464,9 @@ test('sitemap, robots.txt and llms.txt use the site URL', () => {
   assert.match(llms, /^# humanloads\n\n> /);
   assert.match(llms, /- \[zod\]\(https:\/\/example.test\/zod\): ~900 real installs\/week/);
   assert.match(llms, /https:\/\/example.test\/data\/summary.json/);
+  assert.doesNotMatch(llms, /## README badge/);
+  const withBadge = llmsTxt('https://example.test/', [], undefined, [], [], 'https://badge.example.test/');
+  assert.match(withBadge, /\(https:\/\/img\.shields\.io\/endpoint\?url=https:\/\/badge\.example\.test\/badge\/<package-name>\)\]\(https:\/\/example\.test\/<package-name>\)/);
 });
 
 test('site config: default, trailing slash and custom domain', () => {

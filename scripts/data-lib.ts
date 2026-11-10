@@ -861,7 +861,11 @@ Sitemap: ${site}sitemap.xml
 }
 
 // https://llmstxt.org: a Markdown index for language models.
-export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }[], generated?: string, pairs: string[][] = [], lists: Pick<Guide, 'title' | 'path'>[] = []): string {
+export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }[], generated?: string, pairs: string[][] = [], lists: Pick<Guide, 'title' | 'path'>[] = [], badgeApi = ''): string {
+  // Agents asked to add a badge read llms.txt, not a package page: give them the exact markdown.
+  const badge = badgeApi
+    ? `\n## README badge (any npm package)\n\n\`\`\`md\n[![real installs/week](https://img.shields.io/endpoint?url=${badgeApi}badge/<package-name>)](${site}<package-name>)\n\`\`\`\n\nScoped packages keep the slash: ${badgeApi}badge/@scope/name. The endpoint returns shields.io JSON.\n`
+    : '';
   const compares = pairs.length
     ? `\n## Comparisons\n\n${pairs.map((p) => `- [${p.join(' vs ')}](${site}${comparePath(p)})`).join('\n')}\n`
     : '';
@@ -900,7 +904,7 @@ ${GUIDES.map((g) => `- [${g.title.replace(/ · .*$/, '')}](${site}${g.path})`).j
 - A package: ${site}<package-name>, scoped: ${site}@scope/name
 - Compare 2–3 packages: ${site}compare/<a>,<b>[,<c>]
 - Pages compute live numbers in the browser from the public npm API. Prerendered pages also carry the daily build's numbers as static HTML.
-
+${badge}
 ## Data (JSON, part of the catalog refreshed daily${asOf ? `, last build ${asOf}` : ''})
 
 - [summary.json](${site}data/summary.json): per package: npmWeekly, organicWeekly (real installs), low, high, inflation (noise share, 0–1), confidence, tooNew, updated (date of that row)

@@ -14,6 +14,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) sections (Added
   any other package on its first request. Packages whose badge is requested on two or more days join a badge list the
   nightly build refreshes in a rotation; one nobody requests for 45 days leaves it. The service limits new
   computations per client and overall, never limits badges it already has, and keeps no data about readers.
+- `llms.txt` gives the exact badge markdown, and the homepage FAQ says where to get a badge, so people and AI agents
+  find it without opening a package page first.
 - New data file `badges/all.json`: the badge of every recently refreshed package; `summary.json` gains `badgeList`.
 - Ranked lists under `/lists/`: the most downloaded npm packages, and the best packages by category, ordered by real installs.
 - Comparison pages for 100 pairs, up from 32.
