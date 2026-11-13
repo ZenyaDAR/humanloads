@@ -4,6 +4,7 @@
 //   lists/<slug>.html ranked lists built on lists.json
 //   <name>.html       a page per package in tracked.json + summary.json: meta, JSON-LD and a readable static body.
 //                     GitHub Pages serves /<name> from <name>.html with HTTP 200 and no trailing-slash redirect.
+//   data/mentions.json  numbers for the packages the guides mention
 //   sitemap.xml, robots.txt, llms.txt, and CNAME when SITE_URL is a custom domain
 // Numbers come from dist/data/summary.json and featured.json (copied from public/ by vite); without them
 // pages get generic text.
@@ -12,7 +13,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isValidPackageName } from '../src/core/sources.ts';
 import { customDomain, resolveBadgeApiUrl, resolveSiteUrl } from '../site.config.ts';
 import { METHODOLOGY_PATH } from '../src/core/methodology.ts';
-import { GUIDES } from '../src/core/guides.ts';
+import { GUIDES, pickMentions } from '../src/core/guides.ts';
 import { LISTS } from '../src/core/lists.ts';
 import { comparePath, isIndexable } from '../src/core/seo.ts';
 import {
@@ -46,7 +47,12 @@ await writeFile(new URL('index.html', dist), homeHtml(shell, SITE, featured, pai
 await mkdir(new URL('docs/', dist), { recursive: true });
 await mkdir(new URL('lists/', dist), { recursive: true });
 await writeFile(new URL(`${METHODOLOGY_PATH}.html`, dist), methodologyHtml(shell, SITE));
-for (const guide of GUIDES) await writeFile(new URL(`${guide.path}.html`, dist), guideHtml(shell, SITE, guide, insights));
+for (const guide of GUIDES) await writeFile(new URL(`${guide.path}.html`, dist), guideHtml(shell, SITE, guide, insights, packages));
+// The same "Mentioned in this article" numbers for guides the SPA renders itself; summary.json is too big to fetch.
+if (summary) {
+  const mentions = pickMentions([...new Set(GUIDES.flatMap((g) => g.mentions ?? []))], packages);
+  await writeFile(new URL('data/mentions.json', dist), JSON.stringify({ generated: summary.generated, rows: Object.fromEntries(mentions.map((r) => [r.name, r])) }));
+}
 for (const list of LISTS) await writeFile(new URL(`${list.path}.html`, dist), guideHtml(shell, SITE, list, listsFile));
 
 // Also before the package pages: a package named "compare" would clash with this folder.

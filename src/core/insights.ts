@@ -218,7 +218,7 @@ function usedText(f: PackageFacts, market: MarketGrowth | null | undefined, week
         : `Weekdays get ${f.weekdayRatio.toFixed(2)}× the downloads of weekends, so there is no clear work-week rhythm.`,
     );
   }
-  if (f.mirrorsYear > 0) out.push(`Over the last 12 months, ${num(f.mirrorsYear)} downloads arrived in publish spikes and were attributed to mirrors.`);
+  if (f.mirrorsYear > 0) out.push(`Over the last 12 months, ${num(f.mirrorsYear)} downloads arrived in publish spikes and were attributed to mirrors and scanners.`);
   if (f.crawlerFloor !== null && f.crawlersWeekly > 0) {
     out.push(`Crawlers account for about ${num(f.crawlersWeekly)} downloads a week, roughly ${num(f.crawlerFloor)} per version.`);
   }
@@ -250,7 +250,7 @@ export function chainHtml(name: string, steps: ChainStep[] | undefined, base: st
         <h2 class="section-title">Where do the downloads of ${n} come from?</h2>
         <p>Probably mostly through other packages. Each package below requires the one above it, and their weekly downloads on the matching versions line up within about 30%. This is an inference from download counts, not something npm records.</p>
         ${chainListHtml(steps, base)}
-        <p>Past ${esc(steps.at(-1)!.name)} the trail splits or we can't follow it. These are still real installs, but the people running them may never have chosen ${n}. <a href="${esc(base + CHAIN_GUIDE_PATH)}">How a package ends up like this</a>.</p>
+        <p>Past ${esc(steps.at(-1)!.name)} the trail splits or we can't follow it. They still count as real installs, but the projects behind them may never have chosen ${n} directly. <a href="${esc(base + CHAIN_GUIDE_PATH)}">How a package ends up like this</a>.</p>
       </section>`;
 }
 
@@ -299,6 +299,34 @@ export function monthlyHtml(name: string, f: PackageFacts | undefined): string {
         </table></div>
         <p class="fineprint">Whole months through ${esc(date(monthEnd(m.months.at(-1)!)))}. Publish spikes are found day by day and summed per month. Real installs apply this week's crawler share to each month's downloads (the upper end also keeps the removed spikes), so they follow npm's curve rather than measure it. The change compares spike-free downloads per day.</p>
       </section>`;
+}
+
+// Short verdict for the package page strip; the full sentences stay in factsHtml.
+export function maintainedPanelHtml(f: PackageFacts | undefined): string {
+  if (!f) return '';
+  const age = f.lastRelease ? daysBetween(f.lastRelease.day, f.asOf) : null;
+  const [verdict, tone] = f.deprecated
+    ? ['No, deprecated', 'low']
+    : f.maintenanceNote
+      ? ['Only partly', 'medium']
+      : age === null
+        ? ['Unclear', 'medium']
+        : age <= 180
+          ? ['Most likely yes', 'high']
+          : age <= 365
+            ? ['Less clear', 'medium']
+            : ['Probably not', 'low'];
+  const rows: [string, string, string?][] = [
+    ...(f.lastRelease ? [['Last release', date(f.lastRelease.day)] as [string, string]] : []),
+    ['Releases, 12 mo', `${num(f.stableReleasesYear)}${f.medianGapDays !== null ? ` · every ~${num(f.medianGapDays)} d` : ''}`],
+    ...(f.growth3m !== null ? [['Downloads, 3 mo', trend(f.growth3m), f.growth3m >= 0.05 ? 'up' : f.growth3m <= -0.05 ? 'down' : ''] as [string, string, string]] : []),
+    ...(f.firstPublished ? [['First published', date(f.firstPublished)] as [string, string]] : []),
+  ];
+  return `<section class="panel-sec" aria-labelledby="mt-h">
+      <h2 class="panel-title" id="mt-h">Is it maintained?</h2>
+      <p class="verdict verdict-${tone}">${verdict}</p>
+      <dl class="kv">${rows.map(([k, v, c]) => `<div><dt>${k}</dt><dd class="num${c ? ` ${c}` : ''}">${esc(v)}</dd></div>`).join('')}</dl>
+    </section>`;
 }
 
 export function factsHtml(name: string, f: PackageFacts, market?: MarketGrowth | null, npmWeekly = 0): string {

@@ -40,7 +40,8 @@ npm run build
 
 ## Ground rules
 
-- **No new dependencies** unless a few lines of code can't do the job. The site ships one runtime dependency.
+- **No new dependencies** unless a few lines of code can't do the job. The site ships two runtime dependencies
+  (marked and DOMPurify, for package READMEs).
 - **Code, comments, identifiers and commit messages in English.**
 - **The estimate is the product.** A change to `src/core/estimate.ts` needs a test in `test/estimate.test.ts`
   (fixtures live in `test/fixtures/`, fetch new ones with `node scripts/fetch-fixture.mjs <package>`),
@@ -52,14 +53,15 @@ npm run build
 ## How the site is built and deployed
 
 - `.github/workflows/deploy.yml` tests, builds and publishes `dist/` to GitHub Pages. No build output is committed.
-- Live data (`public/data/`, `public/badges/`) is fetched by `npm run data` (about 150 packages, several minutes).
+- Live data (`public/data/`, `public/badges/`) is fetched by `npm run data` (up to 150 catalog packages, plus the tracked and badge-list packages due that night; several minutes).
   It runs at most once a day: the nightly schedule fetches it and caches it, and pushes reuse that day's cache.
   To refetch on demand: Actions → Deploy to GitHub Pages → Run workflow → tick "Refetch live data".
 - Pushes that only touch Markdown or GitHub templates don't deploy.
 - The site URL is one setting, `SITE_URL` (`site.config.ts`, overridable by a repository variable). Canonical links,
   Open Graph, sitemap, robots.txt, llms.txt, JSON-LD, badges and the Vite base path all derive from it.
 - The badge service (`server/`) deploys to Railway from `main` (`railway.json`), as one instance with a volume for its
-  SQLite file. The site links badges to it when the repository variable `BADGE_API_URL` is set. Each night
+  SQLite file. The site links badges to it when the repository variable `BADGE_API_URL` is set; for local builds, put
+  `BADGE_API_URL=https://…` in a git-ignored `.env` file. Each night
   `npm run data` reads its request log (`GET /requested`, with the `BADGE_SYNC_TOKEN` secret, the same value as the
   service's variable) and keeps the badge list in `summary.json`: names requested on two or more days join it, and
   leave after 45 days without a request.

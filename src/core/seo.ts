@@ -15,12 +15,8 @@ export const REPO_LINK_HTML = `<a class="gh-link" href="${REPO_URL}" rel="noopen
 // Not "npm installs": search completes it to the `npm install` command. The metric is "real installs": what is left after
 // mirror spikes and the crawler floor. CI and dependency installs do install the package, so the label holds at any scale.
 export const HOME_TITLE = 'npm download stats: check real downloads of any package · humanloads';
-export const HOME_PITCH = 'Check the npm download stats of any package. <span class="hl">See how many are real installs.</span>';
 export const HOME_DESCRIPTION =
-  'Check the npm download stats of any package and see how many are real installs, with mirror spikes and crawler traffic removed. Free, no signup.';
-export const NOISIEST_TITLE = "Most noise in npm's count";
-export const NOISIEST_NOTE = 'settled packages, no release in the last two weeks';
-export const NOISIEST_CAPTION = 'Noise here means ordinary mirrors and crawlers, not foul play.';
+  'Check the npm download stats of any package and see how many are real installs, with mirror spikes and the crawler floor removed. Free, no signup.';
 export const NOISE_CAPTION = "Noise: the share of npm's count that mirror spikes and crawlers account for. What remains still includes CI and dependency installs.";
 export const noiseText = (npm: number, organic: number, tooNew?: boolean): string => {
   if (tooNew || npm <= 0) return 'unknown yet';
@@ -53,20 +49,20 @@ const noiseShare = (n: CardNumbers): number => (n.npm > 0 ? Math.min(1, Math.max
 
 // What filtering did to npm's count, as one bar: solid = real installs, hatched = noise. A huge package reads as
 // an all-solid bar, a mostly-noise one as an all-hatched bar; the text says the same in words.
+// The bar, then the same figure as a red-pen note under it.
 function noiseHtml(n: CardNumbers): string {
   if (n.tooNew) {
-    return `<div class="noise"><p class="noise-text">Noise: too new to tell yet, so the range is wide.</p><span class="noise-bar noise-bar-unknown" aria-hidden="true"></span></div>`;
+    return `<div class="noise"><span class="noise-bar noise-bar-unknown" aria-hidden="true"></span><p class="noise-text hand">Noise: too new to tell yet, so the range is wide.</p></div>`;
   }
-  const key = '<span class="noise-key"><span class="key noise-cut" aria-hidden="true"></span>noise <span class="key noise-kept" aria-hidden="true"></span>real installs</span>';
   const quiet = quietAtScale(n.npm, n.organic);
   const share = quiet ? 0 : noiseShare(n);
   const all = share >= 0.995;
   const text = quiet
-    ? `<strong>noise under 1%</strong> of npm's count, so nearly all of it counts.`
+    ? `<strong>noise under 1%</strong> of npm's count, so filtering barely changes it.`
     : all
       ? `<strong>Nearly all</strong> of npm's count looks like noise.`
-      : `About <strong class="num">${Math.round(share * 100)}%</strong> of npm's count looks like noise.`;
-  return `<div class="noise"><p class="noise-text">${text} ${key}</p>${noiseBar(share)}</div>`;
+      : `About <strong>${Math.round(share * 100)}%</strong> of npm's count looks like noise.`;
+  return `<div class="noise">${noiseBar(share)}<p class="noise-text hand">${text}</p></div>`;
 }
 
 // Solid part = what is left after filtering, hatched part = noise. Decorative: the same figure is always written out.
@@ -76,20 +72,11 @@ export function noiseBar(share: number, cls = ''): string {
   return `<span class="noise-bar${cls}" aria-hidden="true">${kept}${cut}</span>`;
 }
 
-// Links to well-known package pages on the home page: crawlers find them, and people get a quick way in.
-export function popularHtml(base: string, names: string[]): string {
-  if (!names.length) return '';
-  return `<section class="cmp-links-sec">
-      <h2 class="section-title">Popular npm packages</h2>
-      <ul class="cmp-links">${names.map((n) => `<li><a class="tag" href="${esc(base + n)}">${esc(n)}</a></li>`).join('')}</ul>
-    </section>`;
-}
-
 // The plain questions from search, on the home page in both static and app markup.
 export function homeFaqHtml(base: string): string {
-  return `<section class="home-faq doc">
-      <h2 class="section-title">npm downloads: common questions</h2>
-      <dl class="doc-faq">${HOME_FAQ.map(([q, a]) => `<dt>${esc(q)}</dt><dd>${esc(a)}</dd>`).join('')}</dl>
+  return `<section class="wrap sec home-faq">
+      <div class="sec-head"><div><p class="kicker hand">asked a lot</p><h2 class="sec-title">npm downloads: common questions</h2></div></div>
+      <dl class="faq">${HOME_FAQ.map(([q, a]) => `<div><dt>${esc(q)}</dt><dd>${esc(a)}</dd></div>`).join('')}</dl>
       <ul class="cmp-links">${GUIDES.map((g) => `<li><a class="tag" href="${esc(base + g.path)}">${esc(g.title.replace(/ · .*$/, ''))}</a></li>`).join('')}</ul>
     </section>`;
 }
@@ -114,27 +101,24 @@ export function peopleAnswerHtml(name: string, n: CardNumbers): string {
 }
 
 // The two number cards and the noise bar, shared by the SPA and the prerender so nothing moves when the app takes over.
-// `extra` fills the "Why this estimate" disclosure (notes only exist once the estimate is computed live).
-export function numberCardsHtml(n: CardNumbers, extra = ''): string {
-  const point = n.tooNew || quietAtScale(n.npm, n.organic) ? '' : `<p class="card-point">best guess <strong>${roundCount(n.organic)}</strong></p>`;
+// `extra` fills the "Why this estimate" disclosure (notes only exist once the estimate is computed live); null leaves
+// the disclosure out, for a page that shows the notes elsewhere.
+export function numberCardsHtml(n: CardNumbers, extra: string | null = ''): string {
+  const point = n.tooNew || quietAtScale(n.npm, n.organic) ? '' : `<span class="num corr-point">best guess ${roundCount(n.organic)}</span>`;
   const why = extra || '<p class="card-sub">With JavaScript on, this lists what the filter found for this package.</p>';
-  return `<section class="cards" aria-label="Downloads in the last 7 days">
-        <div class="card card-npm">
-          <div class="card-head"><h2 class="card-label">npm says</h2></div>
-          <p class="card-big"><s class="struck">${Math.round(n.npm).toLocaleString('en-US')}</s></p>
-          <p class="per">per week</p>
-          <p class="card-sub">Every tarball fetch: mirrors, scanners, CI and people.</p>
+  const pill = n.checking
+    ? `<span class="pill pill-checking">${CHECKING_LABEL}</span>`
+    : `<span class="pill pill-${esc(n.confidence)}">${esc(n.confidence)} confidence</span>`;
+  return `<section class="cards corr" aria-label="Downloads in the last 7 days">
+        <div class="corr-row">
+          <p class="corr-label">npm says / week</p>
+          <p class="num corr-npm"><s class="struck" title="Every tarball fetch: mirrors, scanners, CI and people"><span class="sr-only">npm says </span>${Math.round(n.npm).toLocaleString('en-US')}</s></p>
         </div>
-        <div class="card card-human">
-          <div class="card-head"><h2 class="card-label">real installs</h2>
-            ${n.checking ? `<span class="pill pill-checking">${CHECKING_LABEL}</span>` : `<span class="pill pill-${esc(n.confidence)}">${esc(n.confidence)} confidence</span>`}</div>
-          <p class="card-big">≈ <mark>${rangeText(n.low, n.high)}</mark></p>
-          <p class="per">per week</p>
-          ${point}
-          <p class="card-sub">${FILTERED_NOTE}</p>
-        </div>
+        <p class="corr-label corr-label-real">real installs / week</p>
+        <p class="num corr-big">≈ <mark>${rangeText(n.low, n.high)}</mark></p>
+        <p class="corr-meta">${pill}${point}</p>
         ${noiseHtml(n)}
-        <details class="why"><summary>Why this estimate</summary>${why}</details>
+        ${extra === null ? '' : `<details class="why"><summary>Why this estimate</summary><p class="card-sub">${FILTERED_NOTE}</p>${why}</details>`}
       </section>`;
 }
 
@@ -144,17 +128,16 @@ export function numberCardsHtml(n: CardNumbers, extra = ''): string {
 const MAX_DESCRIPTION = 160;
 const clip = (s: string) => (s.length <= MAX_DESCRIPTION ? s : `${s.slice(0, MAX_DESCRIPTION - 1)}…`);
 
-// "446,650,334" reads badly in a search snippet; big numbers go compact ("447M").
-const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
-const fmt = (n: number) => (n >= 10_000 ? compact.format(n) : Math.round(n).toLocaleString('en-US'));
-
 // Long titles get cut off in results and flagged by Bing, so the site name is the first thing to go.
 const MAX_TITLE = 70;
 const titled = (t: string) => (t.length + SITE_NAME.length + 3 <= MAX_TITLE ? `${t} · ${SITE_NAME}` : t);
+// The first variant that fits; the last one is used as is, since a package name alone can exceed the limit.
+const firstFitting = (...variants: string[]) => variants.find((t) => t.length <= MAX_TITLE) ?? variants[variants.length - 1];
 
 export function packageTitle(name: string): string {
-  const full = `${name} npm downloads: weekly stats and real installs`;
-  return full.length <= MAX_TITLE ? titled(full) : `${name} npm downloads and real installs`;
+  const subject = name === 'npm' ? 'npm' : `${name} npm`; // not "npm npm downloads"
+  const full = `${subject} downloads: weekly stats and real installs`;
+  return full.length <= MAX_TITLE ? titled(full) : firstFitting(`${subject} downloads and real installs`, `${subject} downloads`);
 }
 
 // Below this many real installs a week a page stays reachable but out of search indexes: there is little to
@@ -165,19 +148,21 @@ export const isIndexable = (r?: Pick<FeaturedRow, 'organicWeekly'>): boolean => 
 // With build-time numbers (summary.json) the description quotes them; without, it stays generic.
 export function packageDescription(name: string, r?: Pick<FeaturedRow, 'organicWeekly' | 'low' | 'high' | 'confidence' | 'npmWeekly'>): string {
   return clip(r
-    ? `${name} npm downloads: ${fmt(r.npmWeekly)} a week on npm, about ${rangeText(r.low, r.high)} real installs after removing ` +
+    ? `${name} npm downloads: ${roundCount(r.npmWeekly)} a week on npm, about ${rangeText(r.low, r.high)} real installs after removing ` +
         `mirrors and crawlers (${r.confidence} confidence).`
     : `Check ${name} npm downloads and real installs: weekly stats, a 12-month chart and a per-version breakdown, with mirrors and crawlers removed.`);
 }
 
 export function compareTitle(names: string[]): string {
-  return titled(`${names.join(' vs ')}: npm downloads and real installs compared`);
+  const vs = names.join(' vs ');
+  const full = `${vs}: npm downloads and real installs compared`;
+  return full.length <= MAX_TITLE ? titled(full) : firstFitting(`${vs}: npm downloads compared`, vs);
 }
 
 export const comparePath = (names: string[]) => `compare/${names.join(',')}`;
 
 // The home page links this many comparisons; the rest are reached through package pages, lists and each other.
-export const HOME_COMPARE_SIZE = 32;
+export const HOME_COMPARE_SIZE = 8;
 
 // "Popular comparisons" links (data/compare.json), shared by the SPA home and the prerendered pages.
 // `esc` is passed in so this module stays free of DOM and Node imports.
@@ -198,8 +183,9 @@ export function compareDescription(names: string[], rows?: (CompareRow | undefin
   const vs = names.join(' vs ');
   if (rows?.length === names.length && rows.every(Boolean)) {
     const counts = (pick: (r: CompareRow) => number, format: (n: number) => string) => (rows as CompareRow[]).map((r) => format(pick(r))).join(' vs ');
-    return clip(`${vs} npm downloads: ${counts((r) => r.npmWeekly, fmt)} a week on npm, ` +
+    // Both columns use the same rounding, or one number reads as "2M" on npm and "2.03M" real.
+    return clip(`${vs} npm downloads: ${counts((r) => r.npmWeekly, roundCount)} a week on npm, ` +
       `about ${counts((r) => r.organicWeekly, roundCount)} real installs after removing mirrors and crawlers.`);
   }
-  return clip(`${vs}: npm weekly downloads compared week by week, with mirror spikes and crawler traffic removed.`);
+  return clip(`${vs}: npm weekly downloads compared week by week, with mirror spikes and the crawler floor removed.`);
 }

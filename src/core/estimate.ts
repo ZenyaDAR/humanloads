@@ -5,7 +5,7 @@ import type { Confidence, DailyEstimate, Estimate, EstimateOptions, Publish, Raw
 export const GLOBAL_FLOOR_PER_VERSION = 3;
 
 // Bump when numbers from older builds must not be carried over (scripts/build-data.mjs).
-export const MODEL_VERSION = 'v2';
+export const MODEL_VERSION = 'v3';
 
 const SPIKE_DAYS = 3; // window [p, p+3]
 // Background day offsets relative to a window day.
@@ -17,6 +17,9 @@ const NEAR_OFFSETS = Array.from({ length: 28 }, (_, i) => (i < 14 ? i - 14 : i -
 // package's own daily volume are left in; tune with canary data in stage 3.
 const SPIKE_FACTOR = 2;
 const OLD_VERSION_DAYS = 14;
+// ponytail: the low end of Tenable's 100-150 automated downloads per new version (2026). A floor for the spike that
+// step A may miss when publishes overlap. Measure it on the canary (calibrate()) if it needs to be exact.
+const BOT_HITS_PER_NEW_VERSION = 100;
 // Count noise on the weekly bounds: n ± NOISE_Z·√n is a ~95% Poisson band, so the range never collapses
 // to a single value when all old versions sit on the same floor.
 const NOISE_Z = 2;
@@ -133,7 +136,7 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
   });
   const spikesRemoved = publishes.filter((p) => windowOf(p).some((d) => clipped.has(d))).length;
   const mirrorsTotal = Math.round(series.reduce((s, d, i) => s + d.downloads - cleaned[i], 0));
-  if (spikesRemoved) notes.push(`${spikesRemoved} publish spikes removed (${fmt(mirrorsTotal)} downloads attributed to mirrors)`);
+  if (spikesRemoved) notes.push(`${spikesRemoved} publish ${spikesRemoved === 1 ? 'spike' : 'spikes'} removed (${fmt(mirrorsTotal)} downloads attributed to mirrors and scanners)`);
 
   // Step B: crawler floor from per-version weekly downloads.
   const lastDay = series.at(-1)?.day;
@@ -161,7 +164,7 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
     const f = cal ? cal.floorPerVersion : GLOBAL_FLOOR_PER_VERSION;
     floors = { point: f, low: 2 * f, high: 0 };
     notes.push(
-      `Only ${old.length} versions older than ${OLD_VERSION_DAYS} days — crawler floor not estimable, assumed ${fmt(f)} per version` +
+      `Only ${old.length} ${old.length === 1 ? 'version is' : 'versions are'} older than ${OLD_VERSION_DAYS} days, too few to measure the crawler floor, so it is assumed to be ${fmt(f)} per version` +
         (cal ? ` (calibrated on canary ${cal.source}, ${cal.updated.slice(0, 10)})` : ' (global default)'),
     );
   }
@@ -172,7 +175,20 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
   // Fresh versions' per-version counts still contain the publish spike Step A removed from the daily series,
   // so take the same amount off the per-version organic sum to stay on the cleaned scale.
   const mirrorsLastWeek = sumLast7(series.map((d) => d.downloads)) - cleanedWeek;
-  const organicFor = (f: number) => Math.max(0, counts.reduce((s, v) => s + Math.max(0, v - f), 0) - mirrorsLastWeek);
+  // Download pumping (Tenable 2026): with publishes every day for weeks, step A has no clean background and cuts
+  // nothing. Versions whose publish window reaches into the last 7 days carry their bot fetches anyway, so take
+  // at least BOT_HITS_PER_NEW_VERSION off each of them (no more than it got above the floor).
+  const spikeCutoff = lastDay ? addDays(lastDay, -6 - SPIKE_DAYS) : '';
+  const fresh = versionNames.filter((v) => publishDay[v] !== undefined && publishDay[v] >= spikeCutoff);
+  const botsFor = (f: number) => fresh.reduce((s, v) => s + Math.min(BOT_HITS_PER_NEW_VERSION, Math.max(0, (versionsLastWeek[v] || 0) - f)), 0);
+  // The upper bound skips this: like a cut spike, the bot share is assumed, and real users may be in it.
+  const organicFor = (f: number, bots = true) =>
+    Math.max(0, counts.reduce((s, v) => s + Math.max(0, v - f), 0) - Math.max(mirrorsLastWeek, bots ? botsFor(f) : 0));
+  const pumpedExtra = Math.round(botsFor(floors.point) - mirrorsLastWeek);
+  if (pumpedExtra > 0 && pumpedExtra >= 0.1 * cleanedWeek)
+    notes.push(
+      `${fresh.length} new versions reached into the last week. Each new version draws about ${BOT_HITS_PER_NEW_VERSION} automated downloads, so ${fmt(pumpedExtra)} more are attributed to mirrors and scanners`,
+    );
   // npm outage days report 0 in the daily series while per-version counts still include them, which would
   // saturate the ratio. Fill such zeros with their background in the denominator only; daily values stay.
   let outageDays = 0;
@@ -185,9 +201,9 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
     outageDays++;
     return s + Math.round(b);
   }, 0);
-  if (outageDays) notes.push(`${outageDays} of the last 7 days look like npm outages (reported 0) — filled with background for the ratio`);
-  const ratio = (f: number) => (ratioWeek > 0 ? Math.min(1, organicFor(f) / ratioWeek) : 0);
-  const r = { point: ratio(floors.point), low: ratio(floors.low), high: ratio(floors.high) };
+  if (outageDays) notes.push(`${outageDays} of the last 7 days look like npm outages (reported as 0). For the ratio, they count at the level of nearby days`);
+  const ratio = (f: number, bots = true) => (ratioWeek > 0 ? Math.min(1, organicFor(f, bots) / ratioWeek) : 0);
+  const r = { point: ratio(floors.point), low: ratio(floors.low), high: ratio(floors.high, false) };
   // Add count noise to the weekly bounds, then turn them back into ratios on the cleaned scale.
   if (cleanedWeek > 0) {
     const n = r.point * cleanedWeek;
@@ -234,7 +250,7 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
   if (crawlerFloorPerVersion !== null) {
     notes.push(
       crawlerFloorPerVersion > 0
-        ? `Each of ${fmt(withDownloads)} versions got ~${fmt(Math.round(crawlerFloorPerVersion))} downloads last week — crawler pattern`
+        ? `Old versions got about ${fmt(Math.round(crawlerFloorPerVersion))} downloads each last week, used or not. That is the crawler floor, subtracted from all ${fmt(withDownloads)} versions with downloads`
         : `Old versions show no crawler floor (some got 0 downloads last week)`,
     );
   }
@@ -259,7 +275,7 @@ export function estimate(data: RawPackageData, opts: EstimateOptions = {}): Esti
     confidence = 'low';
   } else if (!enoughToJudge) {
     confidence = 'low';
-    notes.push(`Under 10 real installs a week — noise is comparable to the signal`);
+    notes.push(`Under 10 real installs a week: at this size the noise is as large as the signal`);
   } else if (crawlerFloorPerVersion === null) {
     // Rhythm is easy to fake and CI has it too, so it and evidence lift an unmeasured floor to medium at most.
     confidence = evidenceNotes.length || rhythm ? 'medium' : 'low';

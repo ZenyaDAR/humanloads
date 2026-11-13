@@ -5,19 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>humanloads: npm download stats and real installs</title>
     <meta name="description" content="Check the npm download stats of any package and see how many are real installs, with mirrors and crawlers removed." />
-    <meta name="theme-color" content="#FFFEF9" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#161A2A" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#F4F3EE" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14151B" media="(prefers-color-scheme: dark)" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="humanloads" />
     <link rel="canonical" href="%SITE_URL%" />
     <meta property="og:url" content="%SITE_URL%" />
     <meta property="og:title" content="humanloads: npm download stats and real installs" />
-    <meta property="og:description" content="npm counts every tarball fetch: mirrors, scanners, CI. humanloads shows how many are real installs, with a range." />
+    <meta property="og:description" content="npm counts every tarball fetch, including mirrors, scanners and crawlers. humanloads takes out mirror spikes and the crawler floor and shows the rest as a range." />
     <!-- og.png is exported from public/og.svg; social sites do not render SVG previews. -->
     <meta property="og:image" content="%SITE_URL%og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="A pencil line of npm downloads towering over a blue ballpoint line of real installs." />
+    <meta property="og:image:alt" content="A pencil line of npm downloads towering over a blue line of real installs." />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" href="/favicon.ico" sizes="48x48" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
@@ -28,8 +28,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!-- Fonts load without blocking first paint; display=swap shows the fallback font until they arrive. -->
-    <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=JetBrains+Mono:wght@400;500;600&display=swap" /></noscript>
+    <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Shantell+Sans:wght@600;700;800&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" />
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Shantell+Sans:wght@600;700;800&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" /></noscript>
     <script>
       // Apply the saved theme before first paint, so a dark-theme reader never sees a flash of paper.
       try {
@@ -39,7 +39,7 @@
     </script>
   </head>
   <body>
-    <main id="app"></main>
+    <div id="app"></div>
     <noscript><p style="padding: 16px">humanloads computes its estimates in your browser, so it needs JavaScript.</p></noscript>
     <script type="module" src="/src/web/main.ts"></script>
     <!-- Cloudflare Web Analytics: cookieless page-view counts, no personal data. -->

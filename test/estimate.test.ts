@@ -261,6 +261,29 @@ test('pumped package: a flat stream on one version never reaches high without in
   }
 });
 
+// Tenable's "download pumping": versions published every day for weeks. Every background day sits inside
+// another publish window, so step A has nothing clean to compare with and keeps the spikes.
+test('pumped package: weeks of daily publishes do not turn bot fetches of new versions into installs', () => {
+  const n = 120;
+  const time: Record<string, string> = {};
+  const v: Record<string, number> = {};
+  const daily = Array.from({ length: n }, () => 5);
+  for (let i = 0; i < 10; i++) [time[`0.0.${i}`], v[`0.0.${i}`]] = [isoAt(i), 3];
+  for (let p = 85; p < n; p++) {
+    for (const k of [0, 1]) {
+      const name = `1.${p}.${k}`;
+      time[name] = isoAt(p);
+      // ~120 bot downloads per version over its first 4 days, nobody uses it.
+      for (let d = p; d < Math.min(n, p + 4); d++) daily[d] += 30;
+      const inLastWeek = Array.from({ length: 4 }, (_, d) => p + d).filter((d) => d >= n - 7 && d < n).length;
+      v[name] = 30 * inLastWeek + (p < n - 14 ? 3 : 0);
+    }
+  }
+  const e = estimate(raw(daily.map((downloads, i) => ({ day: dayAt(i), downloads })), time, v));
+  assert.ok(e.lastWeek.organic <= 0.15 * e.lastWeek.npm, JSON.stringify(e.lastWeek));
+  assert.ok(e.notes.some((x) => x.includes('new versions')), JSON.stringify(e.notes));
+});
+
 test('awaitingEvidence: true only where evidence could lift medium to high', () => {
   assert.equal(awaitingEvidence(estimate(loadFixture('react'))), true);
   assert.equal(awaitingEvidence(estimate(loadFixture('react'), { evidence: RICH_EVIDENCE })), false);

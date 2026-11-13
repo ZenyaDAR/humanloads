@@ -2,7 +2,7 @@
 
 > A shorter, reader-friendly version of these notes lives on the site: https://humanloads.dev/docs/methodology
 
-> We report **real installs**: npm's count without publish spikes from mirrors and without the crawler floor.
+> We report **real installs**: npm's count without the publish spikes from mirrors and scanners, and without the crawler floor.
 > **This is not a count of people.** CI runs, Docker builds and dependency installs all remain, and no public data can
 > separate them. The filter helps most on small packages, where these two patterns can be most of the count.
 
@@ -16,8 +16,8 @@ Uniqueness, IP, User-Agent and client type are not taken into account. The count
 | Mirrors (Artifactory, Nexus, npmmirror, Verdaccio proxies...) | A spike on the day a version is published, fading out over 2-4 days |
 | Security scanners and crawlers | A flat "floor": **every** version gets the same number of downloads per week |
 | Other projects' CI | Regular downloads of one (pinned) version, often on weekdays |
-| Live developers | Uneven, mostly the latest version and versions pinned in lock files |
-| Inflated counts | Direct requests to the tarball URL, indistinguishable from the rest |
+| Developers | Uneven, mostly the latest version and versions pinned in lock files |
+| Direct tarball requests, including deliberate inflation | Indistinguishable from the rest |
 
 ## 2. Confirmed on real data (a small package, 2026-07…11)
 
@@ -29,22 +29,23 @@ Uniqueness, IP, User-Agent and client type are not taken into account. The count
 | all other days | 0-11 | background |
 
 Downloads per version over the last week: `0.1.0: 3, 0.2.0: 3, 0.2.1: 3, 0.3.0: 3, 0.3.1: 3, 0.4.0: 5`.
-Every version received exactly 3 downloads. This is how a robot behaves when it downloads all versions in a row once a week.
+Every version received exactly 3 downloads. That is the pattern of a crawler that fetches every version.
 Above that floor there are only **2** downloads of the latest version. Of 20 weekly downloads, roughly 2 are left after filtering.
 
 This matches the Tenable research: ~100-150 automated downloads for every new version.
 
-## 3. Model v2
+## 3. Model v3
 
 Inputs (all public, CORS is open):
-- `GET https://api.npmjs.org/downloads/range/<from>:<to>/<pkg>`: downloads per day (up to 18 months per request).
+- `GET https://api.npmjs.org/downloads/range/last-year/<pkg>`: downloads per day over the last year.
 - `GET https://registry.npmjs.org/<pkg>`: the `time` field (version publish dates) and metadata.
 - `GET https://api.npmjs.org/versions/<pkg>/last-week`: downloads per version over 7 days.
 
 ### Step A. Cut out publish spikes (daily series)
 1. For each publish day `p`, take the window `[p, p+3]` days.
 2. For each day `d` in the window, the background is `b = max(median of the same weekday over -14/-7 days, median over +7/+14 days)`.
-   Zeros (the npm API has outages where a day is reported as 0) and days inside other windows are skipped.
+   Zeros (the npm API has outages where a day is reported as 0) are skipped. Days inside other publish windows are skipped too,
+   unless nothing else is left (`react` publishes canaries almost daily).
    If both sides are empty, take the median of days of the same kind (weekdays or weekends) within ±14 days, so that an ordinary
    weekday is never compared with a weekend. Only if there are none (a young package), take any non-zero day within ±14 days.
 3. A day counts as a spike only if `actual > 2·b` (`SPIKE_FACTOR`). Its value is then replaced with `b`, and the difference is attributed to mirrors and scanners.
@@ -66,6 +67,12 @@ old neighbouring-day fallback landed on weekend levels and cut ordinary weekdays
 2. Weekly real installs ≈ `Σ max(0, vᵢ − f) − (downloads cut out in step A over the last 7 days)`.
    Per-version downloads include the spike of the fresh version, so we subtract it to stay on the cleaned scale.
    The floor for the point estimate is the 10th percentile, for the lower bound the 25th, for the upper bound the minimum.
+   **Download pumping** (Tenable 2026: hundreds of versions in a few days). With publishes every day for weeks, every background
+   day lies in another publish window, step A has nothing clean to compare with and cuts nothing. So the subtracted amount is
+   `max(step A cut, Σ min(100, max(0, vᵢ − f)))` over versions whose window `[p, p+3]` reaches the last 7 days
+   (`BOT_HITS_PER_NEW_VERSION = 100`, the low end of Tenable's 100–150). The upper bound uses the step A cut only, like a cut
+   spike: the bot share is assumed, not measured. A note appears when the extra part is ≥ 10% of the cleaned week.
+   On fixtures only `react` moves (−1,000 of 245M a week, its canaries); a synthetic pump goes from 94% "real" to ≤ 15%.
 3. The ratio `organic_week / cleaned_week` is applied to the cleaned series from step A. This gives the daily estimate.
    Zero days among the last 7 (from the first publish on) with a background ≥ 10 are treated as an npm outage: in the ratio's denominator we replace them with the background
    (per-version downloads do count those days), otherwise the ratio gets pinned to 1. The daily series itself is not changed.
@@ -115,9 +122,9 @@ shown rounded to three digits. When noise is under 1% of at least 1M a week, the
 | Dependent packages | `packages.ecosyste.ms` | Someone published a package that depends on yours |
 | Dependent repositories | `packages.ecosyste.ms` (`dependent_repos_count`) | Public projects with the package in their manifest |
 | CDN hits | `data.jsdelivr.com/v1/stats/packages/npm/<pkg>` | Use on websites via jsDelivr |
-| GitHub | `api.github.com/repos/...` | Stars, forks and issues from **other** people |
+| GitHub | `api.github.com/repos/...` | Stars, forks, open issues and the last push (display only) |
 
-This is a lower bound: private repositories and corporate projects are invisible to everyone.
+These are signals, not proof, and lower bounds: private repositories and corporate projects are invisible to everyone.
 
 Implemented (`fetchEvidence` in `src/core/sources.ts`). Sources are requested in parallel, and a failure of any one
 (network, 404, 403/429 rate limit, malformed JSON) zeroes out only its own field (`null` / `[]`):
@@ -136,10 +143,12 @@ GitHub stars do not feed into confidence: they indicate interest, not installs.
 
 ## 5. Calibration
 
-- **Canary package.** We publish an empty package `humanloads-canary` that nobody uses, and release a new
-  version on a regular basis. Everything it receives is pure bot noise. It is the reference for `f` and for the spike size.
-  Data collection is a separate script (a CI cron job); the result is published to `public/data/calibration.json`
-  (`floorPerVersion`, `updated`, `source`; we do not measure the spike size yet, the model does not use it). The model only reads this file:
+- **Canary package.** `humanloads-canary` is an empty package that nobody uses. A workflow (`.github/workflows/canary.yml`,
+  opt-in via `CANARY_ENABLED`) publishes a new patch once a week. Everything it receives comes from mirrors, scanners and
+  crawlers, so it is the reference for `f`. The nightly data build (`calibrate()` in `scripts/data-lib.ts`) takes the
+  **median** of last week's downloads over its versions older than 14 days and writes `public/data/calibration.json`
+  (`floorPerVersion`, `updated`, `source`); without old versions it writes `{}` and the default stays. The spike size is
+  not measured: the model does not use it. The model only reads this file:
   `estimate(data, { calibration })` takes `floorPerVersion` instead of the constant 3 when the package's own floor is not measured (step B.4).
   A reading above 100 per version is treated as implausible and ignored.
 - **Control group (planned, not done).** 20-30 packages with known real usage. Today only 8 fixtures guard against regressions,
@@ -149,9 +158,10 @@ GitHub stars do not feed into confidence: they indicate interest, not installs.
   Caveat: CI and weekday releases have it too, so the rhythm only raises `low → medium`, never to `high`.
 
 ## 6. Known limitations
-- Not validated against real user counts.
+- Not validated against real user counts. The canary only shows that an unused package comes out near zero.
 - CI, Docker builds and dependency installs are not removed. For very popular packages they are most of the count, so the model barely changes
   npm's number, and that number says little about people. Growth can reflect automation too.
-- Private usage is invisible by definition.
+- Traffic served by private and corporate mirrors (Artifactory, Nexus, company proxies) never reaches npm, so nobody can see it.
 - Inflated counts from direct requests cannot be told apart. Independent evidence limits how much confidence they can get.
-- npm data lags by 1-2 days.
+- npm publishes its data 1-2 days late.
+- Packages under two weeks old are "too new to tell": the range runs up to the whole week's count and confidence is `low`.

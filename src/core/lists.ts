@@ -38,7 +38,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best npm test frameworks',
     what: 'JavaScript and TypeScript test frameworks',
     lede: 'Unit and integration test runners for JavaScript and TypeScript.',
-    advice: 'Vitest fits projects already on Vite and reuses their config. Jest is still the default in many React and older Node codebases, with a large ecosystem of matchers and plugins. Mocha only runs tests, so you choose your own assertion and mocking libraries.',
+    advice: 'Vitest fits projects already on Vite and reuses their config. Jest is still the default in many React and older Node codebases, with a large ecosystem of matchers and plugins. Mocha only runs tests, so you choose your own assertion and mocking libraries. Jasmine bundles assertions and spies with no extra setup. AVA, tap and uvu are smaller runners, each with its own conventions.',
     names: ['vitest', 'jest', 'mocha', 'jasmine', 'ava', 'tap', 'uvu'],
   },
   {
@@ -47,7 +47,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best npm end-to-end testing tools',
     what: 'End-to-end and browser testing tools',
     lede: 'Tools that test an application through a real browser.',
-    advice: 'Playwright drives Chromium, Firefox and WebKit from one API. Cypress runs inside the browser and is known for its interactive runner. Puppeteer is a browser automation library more than a test runner. Selenium WebDriver suits teams that need the W3C WebDriver protocol across several languages.',
+    advice: 'Playwright drives Chromium, Firefox and WebKit from one API. Cypress runs inside the browser and is known for its interactive runner. Puppeteer is a browser automation library more than a test runner. Selenium WebDriver suits teams that need the W3C WebDriver protocol across several languages. WebdriverIO and Nightwatch are JavaScript test frameworks built on WebDriver. TestCafe runs tests without WebDriver, through a proxy that injects its scripts into the page.',
     names: ['playwright', 'cypress', 'puppeteer', 'selenium-webdriver', 'webdriverio', 'nightwatch', 'testcafe'],
   },
   {
@@ -56,7 +56,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best JavaScript bundlers and build tools',
     what: 'JavaScript bundlers and build tools',
     lede: 'Tools that turn source files into what runs in the browser or gets published.',
-    advice: 'Vite is a common default for new front-end apps, with a fast dev server. webpack still powers many existing apps and has a very wide plugin ecosystem. esbuild and Rspack focus on build speed. Rollup and tsup are frequent choices for building libraries.',
+    advice: 'Vite is a common default for new front-end apps, with a fast dev server. webpack still powers many existing apps and has a very wide plugin ecosystem. esbuild and Rspack focus on build speed. Rollup and tsup are frequent choices for building libraries. Parcel works with little configuration. Rolldown is a Rust bundler with a Rollup-compatible API, from the Vite team.',
     names: ['vite', 'webpack', 'rollup', 'esbuild', 'parcel', '@rspack/core', 'tsup', 'rolldown'],
   },
   {
@@ -65,7 +65,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best JavaScript front-end frameworks',
     what: 'JavaScript front-end frameworks',
     lede: 'UI frameworks and libraries for building web interfaces.',
-    advice: 'React has the largest ecosystem. Vue and Svelte are built around single-file components. Angular ships as a complete framework, with routing, forms and dependency injection included. Preact offers a small React-compatible API, and Solid pairs JSX with fine-grained reactivity.',
+    advice: 'React has the largest ecosystem. Vue and Svelte are built around single-file components. Angular ships as a complete framework, with routing, forms and dependency injection included. Preact offers a small React-compatible API, and Solid pairs JSX with fine-grained reactivity. Lit is for building web components, and Alpine.js adds behavior to server-rendered HTML through attributes.',
     names: ['react', 'vue', '@angular/core', 'svelte', 'preact', 'solid-js', 'lit', 'alpinejs'],
   },
   {
@@ -83,7 +83,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best Node.js web frameworks',
     what: 'Node.js web and API frameworks',
     lede: 'Server frameworks for building APIs and web back ends.',
-    advice: 'Express is the long-time default with the most middleware. Fastify adds schema-based validation and a focus on performance. Hono runs on Node, Bun, Deno and edge runtimes. NestJS adds an opinionated structure on top of Express or Fastify, and Koa stays minimal.',
+    advice: 'Express is the long-time default with the most middleware. Fastify adds schema-based validation and a focus on performance. Hono runs on Node, Bun, Deno and edge runtimes. NestJS adds an opinionated structure on top of Express or Fastify, and Koa stays minimal. hapi favors configuration over middleware, Restify is aimed at REST APIs, and h3 is the server layer under Nuxt.',
     names: ['express', 'fastify', 'koa', 'hono', '@nestjs/core', '@hapi/hapi', 'restify', 'h3'],
   },
   {
@@ -92,7 +92,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best Node.js ORMs and query builders',
     what: 'Node.js ORMs and query builders',
     lede: 'Libraries for talking to a database from Node.js and TypeScript.',
-    advice: 'Prisma generates a typed client from its own schema file. Drizzle defines the schema in TypeScript and stays close to SQL. TypeORM and Sequelize are long-standing ORMs. Mongoose is for MongoDB only. Knex and Kysely are query builders rather than ORMs.',
+    advice: 'Prisma generates a typed client from its own schema file. Drizzle defines the schema in TypeScript and stays close to SQL. TypeORM and Sequelize are long-standing ORMs. MikroORM is a TypeScript ORM built around a unit of work and an identity map. Mongoose is for MongoDB only. Knex and Kysely are query builders rather than ORMs.',
     names: ['prisma', 'drizzle-orm', 'typeorm', 'sequelize', 'mongoose', 'knex', '@mikro-orm/core', 'kysely'],
   },
   {
@@ -101,7 +101,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best TypeScript validation libraries',
     what: 'TypeScript and JavaScript validation libraries',
     lede: 'Libraries that check data at runtime, from form input to API payloads.',
-    advice: 'Zod infers TypeScript types from its schemas. Valibot has a similar idea with a modular design for small bundles. Yup and Joi are older, and Joi is mostly used on the server. Ajv validates JSON Schema, which helps when a schema is shared across languages. class-validator uses decorators and is common with NestJS.',
+    advice: 'Zod infers TypeScript types from its schemas. Valibot has a similar idea with a modular design for small bundles. Yup and Joi are older, and Joi is mostly used on the server. Ajv validates JSON Schema, which helps when a schema is shared across languages. class-validator uses decorators and is common with NestJS. Superstruct composes small validators, and ArkType writes schemas in a syntax close to TypeScript types.',
     names: ['zod', 'yup', 'joi', 'valibot', 'ajv', 'class-validator', 'superstruct', 'arktype'],
   },
   {
@@ -110,7 +110,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best JavaScript HTTP clients',
     what: 'JavaScript and Node.js HTTP clients',
     lede: 'Libraries for making HTTP requests from Node.js and the browser.',
-    advice: 'Browsers and current Node.js versions ship <code>fetch</code>, so you may not need a library at all. Axios adds interceptors and works in both environments. Got is a Node client with retries and streams. Ky is a small wrapper over fetch. Undici is the client behind fetch in Node.js.',
+    advice: 'Browsers and current Node.js versions ship <code>fetch</code>, so you may not need a library at all. Axios adds interceptors and works in both environments. Got is a Node client with retries and streams. Ky and ofetch are small wrappers over fetch, and ofetch is the one Nuxt uses. Undici is the client behind fetch in Node.js. node-fetch brought fetch to Node before it was built in, and SuperAgent is an older client with a chaining API.',
     names: ['axios', 'node-fetch', 'got', 'ky', 'undici', 'superagent', 'ofetch'],
   },
   {
@@ -119,7 +119,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best JavaScript date libraries',
     what: 'JavaScript date and time libraries',
     lede: 'Libraries for parsing, formatting and calculating with dates.',
-    advice: 'date-fns is a set of separate functions that tree-shake well. Day.js is small, with an API close to Moment. Luxon builds on the Intl API and handles time zones well. Moment is in maintenance mode, and its own docs suggest an alternative for new projects.',
+    advice: 'date-fns is a set of separate functions that tree-shake well. Day.js is small, with an API close to Moment. Luxon builds on the Intl API and handles time zones well. Moment is in maintenance mode, and its own docs suggest an alternative for new projects. @js-temporal/polyfill implements Temporal, the new built-in date API, for runtimes that don\'t have it yet.',
     names: ['date-fns', 'dayjs', 'moment', 'luxon', '@js-temporal/polyfill'],
   },
   {
@@ -128,7 +128,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best React state management libraries',
     what: 'React state management libraries',
     lede: 'Libraries for state shared across a React application.',
-    advice: 'Redux Toolkit is the recommended way to write Redux today. Zustand is a small store built on hooks. Jotai and Valtio model state as atoms and proxies. MobX uses observables, and XState models state as explicit state machines.',
+    advice: 'Redux Toolkit is the recommended way to write Redux today; the redux package is its core. Zustand is a small store built on hooks. Jotai models state as atoms, Valtio as proxies. MobX uses observables, and XState models state as explicit state machines.',
     names: ['redux', '@reduxjs/toolkit', 'zustand', 'jotai', 'mobx', 'xstate', 'valtio'],
   },
   {
@@ -164,7 +164,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best JavaScript linters and formatters',
     what: 'JavaScript and TypeScript linters and formatters',
     lede: 'Tools that catch mistakes and keep code style consistent.',
-    advice: 'ESLint finds problems and has the largest set of plugins. Prettier only formats, so the two are often used together. Biome does both in one fast tool. Oxlint focuses on speed and can run alongside ESLint. Stylelint is for CSS.',
+    advice: 'ESLint finds problems and has the largest set of plugins. Prettier only formats, so the two are often used together. Biome does both in one fast tool. Oxlint focuses on speed and can run alongside ESLint. Stylelint is for CSS. standard is ESLint with a fixed config, and dprint is a pluggable formatter.',
     names: ['eslint', 'prettier', '@biomejs/biome', 'oxlint', 'stylelint', 'standard', 'dprint'],
   },
   {
@@ -173,7 +173,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best JavaScript package managers',
     what: 'JavaScript package managers',
     lede: 'Tools that install the dependencies of a JavaScript project.',
-    advice: "Read this ranking with care: npm comes with Node.js, and the others are often installed outside the npm registry, so these counts understate all of them. pnpm saves disk space with a shared store and a strict node_modules. The yarn package on npm is Yarn Classic; newer versions, with Plug'n'Play, are set up per project. Bun is a whole runtime with a fast installer.",
+    advice: "Read this ranking with care: npm comes with Node.js, and the others are often installed outside the npm registry, so these counts say little about how widely each one is used. pnpm saves disk space with a shared store and a strict node_modules. The yarn package on npm is Yarn Classic; newer versions, with Plug'n'Play, are set up per project. Bun is a whole runtime with a fast installer.",
     names: ['npm', 'pnpm', 'yarn', 'bun'],
   },
   {
@@ -209,7 +209,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best JavaScript chart libraries',
     what: 'JavaScript chart and data visualization libraries',
     lede: 'Libraries for drawing charts and data visualizations on the web.',
-    advice: 'Chart.js is a simple way to get common charts on a canvas. Recharts and Nivo are made for React. D3 is low level, so you build the chart yourself. ECharts and Plotly handle large or scientific data sets. Check the license on Highcharts, which requires a paid one for most commercial use.',
+    advice: 'Chart.js is a simple way to get common charts on a canvas. Recharts and Nivo are made for React. D3 is low level, so you build the chart yourself. ECharts offers many chart types and copes with large data sets, Plotly is common for scientific charts, and ApexCharts draws interactive SVG charts. Check the license on Highcharts, which requires a paid one for most commercial use.',
     names: ['chart.js', 'recharts', 'd3', 'echarts', 'apexcharts', 'highcharts', 'plotly.js', '@nivo/core'],
   },
   {
@@ -227,7 +227,7 @@ export const LIST_DEFS: ListDef[] = [
     h1: 'Best JavaScript utility libraries',
     what: 'JavaScript utility libraries',
     lede: 'Collections of helpers for arrays, objects and functions.',
-    advice: 'Modern JavaScript covers much of what these libraries were first written for, so check for a native method first. Lodash remains the most widespread. es-toolkit offers a smaller, modern take with a Lodash compatibility layer. Ramda is built for functional programming, and Remeda is TypeScript first.',
+    advice: 'Modern JavaScript covers much of what these libraries were first written for, so check for a native method first. Lodash remains the most widespread. es-toolkit offers a smaller, modern take with a Lodash compatibility layer. Underscore came before Lodash and still sits in many older dependency trees. Ramda is built for functional programming, Remeda is TypeScript first, and Radash is a smaller set of typed helpers.',
     names: ['lodash', 'ramda', 'underscore', 'es-toolkit', 'remeda', 'radash'],
   },
 ];
@@ -267,14 +267,20 @@ const asOf = (rows: ListRow[]): string => {
   return oldest ? ` Rows are refreshed in rotation, the oldest here on ${esc(fullDate(oldest))}.` : '';
 };
 
+// A curated list's own line is short for a snippet, so it gets what the page shows, as long as it stays within 160
+// characters (Bing's limit). The catalog list's `what` already says it.
+const withTail = (s: string) =>
+  [`${s} Weekly npm downloads vs real installs, updated nightly.`, `${s} Updated nightly.`].find((d) => d.length <= 160) ?? s;
+
 function listGuide(def: ListDef): Guide<ListsFile> {
   const name = def.names ?? [];
   const lead = name.length ? `${name.slice(0, 3).join(', ')} and more` : 'kept up to date';
   return {
     path: `lists/${def.slug}`,
     title: `${def.h1} · humanloads`,
-    description: name.length ? `${def.what} ranked by real installs: ${lead}.` : `${def.what}, ${lead}.`,
+    description: name.length ? withTail(`${def.what} ranked by real installs: ${lead}.`) : `${def.what}, ${lead}.`,
     dataFile: LISTS_FILE,
+    items: (ins) => (ins?.lists?.[def.slug]?.rows ?? []).map((r) => r.name),
     ready: (ins) => {
       const data = ins?.lists?.[def.slug];
       return name.length
@@ -302,6 +308,7 @@ function listGuide(def: ListDef): Guide<ListsFile> {
   </section>
   ${compareLinksHtml(base, data?.pairs ?? [], esc, 'Compare them')}`,
         base,
+        { kicker: 'rankings', kickerHref: '#rankings', cols: false, updated: rows.length ? ins?.generated : undefined },
       );
     },
   };
@@ -353,10 +360,25 @@ export function categoryRankHtml(name: string, file: ListsFile | null | undefine
       </section>`;
 }
 
-// Links to the lists, on the home page in both static and app markup.
-export function listLinksHtml(base: string): string {
-  return `<section class="cmp-links-sec">
-      <h2 class="section-title">Best npm packages by category</h2>
-      <ul class="cmp-links">${LIST_DEFS.map((d) => `<li><a class="tag" href="${esc(`${base}lists/${d.slug}`)}">${esc(d.label)}</a></li>`).join('')}</ul>
-    </section>`;
+// Links to the lists as a notebook index (name, dot leader, #1 or an arrow), on the home page in both static and app markup.
+export function listLinksHtml(base: string, tops?: Record<string, string> | null): string {
+  return `<ul class="cat-index">${LIST_DEFS.map((d) => {
+    const top = tops?.[d.slug];
+    return `<li><a href="${esc(`${base}lists/${d.slug}`)}"><span class="cat-name">${esc(d.label)}</span><span class="leader" aria-hidden="true"></span>${
+      top ? `<span class="num cat-top">#1 ${esc(top)}</span>` : '<span class="cat-go" aria-hidden="true">→</span>'
+    }</a></li>`;
+  }).join('')}</ul>`;
+}
+
+// One-line rank for the package page's "Is it maintained?" panel: "#2 of 8 in Validation libraries, behind ajv and
+// ahead of joi →". Same source and readiness rule as categoryRankHtml; the first list that holds the package wins.
+export function categoryRankLineHtml(name: string, file: ListsFile | null | undefined, base: string): string {
+  for (const [k, def] of LIST_DEFS.entries()) {
+    const rows = file?.lists?.[def.slug]?.rows;
+    const i = rows?.findIndex((r) => r.name === name) ?? -1;
+    if (!def.names?.includes(name) || !rows || i < 0 || !LISTS[k].ready!(file ?? null)) continue;
+    const near = [rows[i - 1] && `behind ${esc(rows[i - 1].name)}`, rows[i + 1] && `ahead of ${esc(rows[i + 1].name)}`].filter(Boolean).join(' and ');
+    return `<p class="rank-line"><a href="${esc(`${base}lists/${def.slug}`)}"><strong class="rank-n">#${i + 1} of ${rows.length}</strong> in ${esc(def.label)}${near ? `, ${near}` : ''} <span aria-hidden="true">→</span></a></p>`;
+  }
+  return '';
 }

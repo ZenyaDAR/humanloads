@@ -15,8 +15,16 @@ export function resolveSiteUrl(raw: string | undefined = process.env.SITE_URL): 
 
 // The badge service (server/), which serves a README badge for any npm package and logs which badges are used.
 // Empty: only tracked packages get one, from the static public/badges files. Use a domain you own for it: the URL
-// ends up in other people's READMEs for good. Override at build time: BADGE_API_URL=https://… npm run build
+// ends up in other people's READMEs for good. Set BADGE_API_URL in the environment (CI: a repository variable)
+// or in a local, git-ignored .env file.
 export const DEFAULT_BADGE_API_URL = '';
+
+// Local builds read .env (Node 22); variables already in the environment win. No file: nothing to load.
+try {
+  process.loadEnvFile();
+} catch {
+  // ponytail: no .env is the normal case in CI and on Railway
+}
 
 export function resolveBadgeApiUrl(raw: string | undefined = process.env.BADGE_API_URL): string {
   const value = raw?.trim() ?? DEFAULT_BADGE_API_URL;

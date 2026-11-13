@@ -17,13 +17,15 @@ jobs:
     if: vars.CANARY_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      # Trusted publishing needs npm >= 11.5.1; Node 22 ships npm 10.
-      - run: npm install -g npm@latest
+      # Trusted publishing needs npm >= 11.5.1; Node 22 ships npm 10. Pinned: npm 12 needs a newer Node 22 than setup-node may give.
+      - run: npm install -g npm@11.21.2
       - name: Publish humanloads-canary
         working-directory: canary
         # NPM_TOKEN is optional and only needed for the first publish: npm trusted publishing can be configured

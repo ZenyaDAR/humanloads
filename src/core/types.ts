@@ -19,6 +19,15 @@ export interface RegistryDoc {
   maintainerCount?: number; // just the count: the registry's list also carries email addresses
   deprecated?: string; // the latest version's deprecation message
   maintenanceNote?: string; // the README's own sentence saying the project is in maintenance mode or unmaintained
+  // Latest version, for the package page (redesign 2026-11). All optional: older caches and fixtures lack them.
+  readme?: string; // markdown, clipped
+  dependencies?: Record<string, string>; // name -> range, latest version
+  unpackedSize?: number; // bytes
+  fileCount?: number;
+  types?: boolean; // ships its own types (types/typings field or exports with types)
+  moduleFormats?: ('esm' | 'cjs')[];
+  publisher?: string; // npm username who published the latest version
+  maintainers?: string[]; // npm usernames only, never emails
 }
 
 export interface RawPackageData {
@@ -189,6 +198,25 @@ export interface FeaturedFile {
   examples: string[]; // well-known names for the "try one" links
   popular: string[]; // biggest packages in the catalog, as plain links
   noisiest: FeaturedRow[]; // most noise in npm's count, among packages not in a release window
+  noisyRecent?: boolean; // no quiet package qualified: `noisiest` then includes recent releases
+  rising?: RisingRow[]; // fastest growing by spike-free downloads over 3 months
+  showcase?: Showcase | null; // one comparison drawn on the home page, monthly real installs
+  tops?: Record<string, string>; // #1 by real installs in each hand-picked list, by list slug
+}
+
+// "Growing fastest" on the home page.
+export interface RisingRow {
+  name: string;
+  growth3m: number; // 0.12 = up 12%
+  category?: string; // list label, when the package is in a curated list
+  spark: number[]; // real installs per day, by month, oldest first
+}
+
+// The home page comparison chart: monthly real installs per day for 2-3 packages, same months for all.
+export interface Showcase {
+  names: string[];
+  months: string[]; // YYYY-MM
+  real: number[][]; // per package, per month
 }
 
 // shields.io endpoint badge -> public/badges/<safe-name>.json

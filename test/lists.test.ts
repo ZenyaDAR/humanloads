@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { LISTS, LIST_DEFS, LIST_NAMES, categoryRankHtml, listLinksHtml } from '../src/core/lists.ts';
+import { LISTS, LIST_DEFS, LIST_NAMES, categoryRankHtml, categoryRankLineHtml, listLinksHtml } from '../src/core/lists.ts';
 import { roundCount } from '../src/core/html.ts';
 import { isValidPackageName } from '../src/core/sources.ts';
 import type { FeaturedRow, ListsFile } from '../src/core/types.ts';
@@ -50,7 +50,13 @@ test('a curated list ranks by real installs, skips what it has no number for, an
   assert.equal(g.ready!(insightsOf(rows)), false); // 4 of 7
   const enough = names!.map((n, i) => row(n, 100 - i));
   assert.equal(g.ready!(insightsOf(enough)), true);
-  assert.doesNotMatch(guideHtml(SHELL, SITE, g, insightsOf(enough)), /noindex/);
+  const html = guideHtml(SHELL, SITE, g, insightsOf(enough));
+  assert.doesNotMatch(html, /noindex/);
+  // JSON-LD: the ranking as an ItemList in page order, and the data date as dateModified.
+  const graph = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/s)![1])['@graph'];
+  const itemList = graph.find((n: { '@type': string }) => n['@type'] === 'ItemList');
+  assert.deepEqual(itemList.itemListElement.map((i: { url: string }) => i.url), insightsOf(enough).lists['best-npm-test-frameworks'].rows.map((r) => SITE + r.name));
+  assert.equal(graph.find((n: { '@type': string }) => n['@type'] === 'TechArticle').dateModified, '2026-11-05T00:00:00.000Z');
 });
 
 test('category rank: the same order as the list page, only for ready lists, never the package\'s own number', () => {
@@ -163,4 +169,16 @@ test('archiveNames: dropped rows stay as pages, unpublished ones and live ones d
 test('compareHtml: a page without numbers keeps working but stays out of indexes', () => {
   assert.match(compareHtml(SHELL, ['a', 'b'], [row('a', 5), undefined], SITE), /name="robots" content="noindex"/);
   assert.doesNotMatch(compareHtml(SHELL, ['a', 'b'], [row('a', 5), row('b', 7)], SITE), /noindex/);
+});
+
+test('category rank line: "#n of N in <list>" with neighbours, only for ready lists', () => {
+  const def = LIST_DEFS.find((d) => d.slug === 'best-npm-test-frameworks')!;
+  const file = insightsOf(def.names!.map((n, i) => row(n, 1_000_000 - i * 1000)));
+  const order = file.lists[def.slug].rows.map((r) => r.name);
+  const line = categoryRankLineHtml(order[1], file, '/');
+  assert.match(line.replace(/<[^>]+>/g, ''), new RegExp(`#2 of ${order.length} in ${def.label}, behind ${order[0]} and ahead of ${order[2]}`));
+  assert.match(line, /href="\/lists\/best-npm-test-frameworks"/);
+  assert.doesNotMatch(categoryRankLineHtml(order[0], file, '/'), /behind/);
+  assert.equal(categoryRankLineHtml(order[1], insightsOf([]), '/'), '');
+  assert.equal(categoryRankLineHtml('unrelated', file, '/'), '');
 });

@@ -1,17 +1,20 @@
 // Pure helpers for scripts/build-data.mjs and scripts/prerender.mjs, kept apart from those scripts' top-level
 // network/file work so tests can import them. Only erasable TS syntax: Node runs this file by type stripping.
 import semver from 'semver';
-import type { Calibration, ChainStep, DeprecatedRow, FeaturedRow, InsightsFile, ListData, ListRow, ListsFile, MarketGrowth, RawPackageData } from '../src/core/types.ts';
+import type { Calibration, ChainStep, DeprecatedRow, FeaturedRow, InsightsFile, ListData, ListRow, ListsFile, MarketGrowth, RawPackageData, RisingRow, Showcase } from '../src/core/types.ts';
 import { addDays, median } from '../src/core/estimate.ts';
 import { esc } from '../src/core/html.ts';
 import { badgeFor, compactCount, safeName } from '../src/core/badge.ts';
 import {
-  FILTERED_NOTE, HOME_DESCRIPTION, HOME_PITCH, HOME_TITLE, NOISE_CAPTION, NOISIEST_CAPTION, NOISIEST_NOTE, NOISIEST_TITLE, REPO_LINK_HTML, REPO_URL, SITE_NAME, compareDescription, compareLinksHtml,
-  HOME_COMPARE_SIZE, comparePath, compareTitle, deprecatedHtml, isIndexable, noiseBar, noiseText, numberCardsHtml, packageDescription, peopleAnswerHtml, popularHtml, homeFaqHtml, packageTitle, rangeText, roundCount,
+  FILTERED_NOTE, HOME_DESCRIPTION, HOME_TITLE, NOISE_CAPTION, REPO_URL, SITE_NAME, compareDescription, compareLinksHtml,
+  HOME_COMPARE_SIZE, comparePath, compareTitle, deprecatedHtml, isIndexable, noiseText, numberCardsHtml, packageDescription, peopleAnswerHtml, homeFaqHtml, packageTitle, rangeText, roundCount,
 } from '../src/core/seo.ts';
-import { MARKET_MIN_WEEKLY, adoptionHtml, chainHtml, factsHtml, monthlyHtml } from '../src/core/insights.ts';
-import { GUIDES, HOME_FAQ, type Guide } from '../src/core/guides.ts';
-import { LIST_DEFS, categoryRankHtml, listLinksHtml } from '../src/core/lists.ts';
+import { MARKET_MIN_WEEKLY, adoptionHtml, chainHtml, factsHtml, monthlyHtml, type Monthly } from '../src/core/insights.ts';
+import { ARTICLE_SEARCH_SLOT, GUIDES, HOME_FAQ, pickMentions, type Guide } from '../src/core/guides.ts';
+import { LIST_DEFS, categoryRankHtml } from '../src/core/lists.ts';
+import {
+  COMPARE_COLORS, HOME_NOISY_SIZE, STATIC_TOOLS, compareSectionHtml, examplesHtml, heroHtml, howHtml, journalHtml, notebookHtml, pinnedCardHtml, pinnedRow, categoriesHtml, popularHtml, searchFormInner, siteFooterHtml, siteHeaderHtml, type NavKey,
+} from '../src/core/layout.ts';
 import {
   METHODOLOGY_DESCRIPTION, METHODOLOGY_FAQ, METHODOLOGY_PATH, METHODOLOGY_SECTIONS, METHODOLOGY_TITLE, methodologyBody,
 } from '../src/core/methodology.ts';
@@ -19,7 +22,7 @@ import {
 export { esc };
 
 const FEATURED_SIZE = 8;
-const EXAMPLES_SIZE = 4;
+const EXAMPLES_SIZE = 5;
 const POPULAR_SIZE = 36; // internal links from the homepage, so crawlers reach package pages in one step
 const AUTO_LIST_SIZE = 50; // rows in a list over the whole catalog
 const NOISY_MIN_NPM = 100;
@@ -81,35 +84,97 @@ export function poolFailure(
 
 const daysBetween = (from: string, to: string) => (Date.parse(to) - Date.parse(from)) / DAY_MS;
 
-function settledAndNoisy(r: FeaturedRow): boolean {
+function settledAndNoisy(r: FeaturedRow, quiet: boolean): boolean {
   const f = r.facts;
   if (!f?.firstPublished || !f.lastRelease || f.deprecated || r.tooNew || r.confidence === 'low') return false;
   return (
     r.npmWeekly >= NOISY_MIN_NPM &&
     r.inflation >= NOISY_MIN_SHARE &&
     daysBetween(f.firstPublished, f.asOf) >= NOISY_MIN_AGE_DAYS &&
-    daysBetween(f.lastPublish ?? f.lastRelease.day, f.asOf) >= NOISY_QUIET_DAYS
+    (!quiet || daysBetween(f.lastPublish ?? f.lastRelease.day, f.asOf) >= NOISY_QUIET_DAYS)
   );
 }
 
-export function selectFeatured(all: FeaturedRow[]): { examples: string[]; popular: string[]; noisiest: FeaturedRow[] } {
+// One package per scope, so a single project can't fill a list.
+function onePerScope<T extends { name: string }>(rows: T[]): T[] {
+  const scopes = new Set<string>();
+  return rows.filter((r) => {
+    if (!r.name.startsWith('@')) return true;
+    const scope = r.name.split('/')[0];
+    if (scopes.has(scope)) return false;
+    scopes.add(scope);
+    return true;
+  });
+}
+
+const RISING_SIZE = 6;
+const RISING_MIN_WEEKLY = 10_000;
+const CHART_MONTHS = 12;
+const SHOWCASE_MIN_MONTHS = 6;
+
+// Real installs per day, month by month: the middle of the range over the days with downloads.
+const realPerDay = (m: Monthly) => m.months.map((_, i) => (m.days[i] ? Math.round((m.low[i] + m.high[i]) / 2 / m.days[i]) : 0));
+
+// Only packages from the curated category lists: across the whole catalog the fastest growers are platform binaries
+// and one-project internals, which say nothing to someone picking a library.
+function risingRows(all: FeaturedRow[]): RisingRow[] {
+  const curated = new Set(LIST_DEFS.flatMap((d) => d.names ?? []));
+  const ranked = all
+    .filter((r) => {
+      const f = r.facts;
+      return curated.has(r.name) && f && typeof f.growth3m === 'number' && f.growth3m > 0 && f.monthly?.months.length && !f.deprecated && !r.tooNew && r.organicWeekly >= RISING_MIN_WEEKLY;
+    })
+    .sort((a, b) => b.facts!.growth3m! - a.facts!.growth3m!);
+  return onePerScope(ranked)
+    .slice(0, RISING_SIZE)
+    .map((r) => {
+      const category = LIST_DEFS.find((d) => d.names?.includes(r.name))?.label;
+      return { name: r.name, growth3m: r.facts!.growth3m!, ...(category && { category }), spark: realPerDay(r.facts!.monthly!).slice(-CHART_MONTHS) };
+    });
+}
+
+// The first comparison (three-way ones first) whose packages all have monthly data over enough shared months.
+function pickShowcase(all: FeaturedRow[], pairs: string[][]): Showcase | null {
+  const byName = new Map(all.map((r) => [r.name, r]));
+  for (const names of [...pairs.filter((p) => p.length >= 3), ...pairs.filter((p) => p.length < 3)]) {
+    const ms = names.map((n) => byName.get(n)?.facts?.monthly);
+    if (names.length < 2 || !ms.every((m) => m?.months.length)) continue;
+    const series = ms as Monthly[];
+    const months = series[0].months.filter((mo) => series.every((m) => m.months.includes(mo))).slice(-CHART_MONTHS);
+    if (months.length < SHOWCASE_MIN_MONTHS) continue;
+    const real = series.map((m) => {
+      const perDay = realPerDay(m);
+      return months.map((mo) => perDay[m.months.indexOf(mo)]);
+    });
+    return { names, months, real };
+  }
+  return null;
+}
+
+// #1 by real installs in each hand-picked list, by list slug: the same order the list pages use.
+function categoryTops(all: FeaturedRow[]): Record<string, string> {
+  const byName = new Map(all.map((r) => [r.name, r]));
+  const tops: Record<string, string> = {};
+  for (const d of LIST_DEFS) {
+    const best = (d.names ?? []).map((n) => byName.get(n)).filter((r): r is FeaturedRow => Boolean(r)).sort((a, b) => b.organicWeekly - a.organicWeekly)[0];
+    if (best) tops[d.slug] = best.name;
+  }
+  return tops;
+}
+
+export function selectFeatured(
+  all: FeaturedRow[],
+  pairs: string[][] = [],
+): { examples: string[]; popular: string[]; noisiest: FeaturedRow[]; noisyRecent: boolean; rising: RisingRow[]; showcase: Showcase | null; tops: Record<string, string> } {
   const popular = [...all].sort((a, b) => b.npmWeekly - a.npmWeekly).slice(0, POPULAR_SIZE).map((r) => r.name);
   const examples = popular.slice(0, EXAMPLES_SIZE);
-  // One package per scope, so a single project can't fill the list. Fewer than FEATURED_SIZE qualifying rows give a
-  // shorter list, never one padded with barely noisy packages.
-  const scopes = new Set<string>();
-  const noisiest = all
-    .filter(settledAndNoisy)
-    .sort((a, b) => b.inflation - a.inflation || b.npmWeekly - a.npmWeekly)
-    .filter((r) => {
-      if (!r.name.startsWith('@')) return true;
-      const scope = r.name.split('/')[0];
-      if (scopes.has(scope)) return false;
-      scopes.add(scope);
-      return true;
-    })
-    .slice(0, FEATURED_SIZE);
-  return { examples, popular, noisiest };
+  const byNoise = (rows: FeaturedRow[]) => onePerScope(rows.sort((a, b) => b.inflation - a.inflation || b.npmWeekly - a.npmWeekly)).slice(0, FEATURED_SIZE);
+  // Fewer than FEATURED_SIZE qualifying rows give a shorter list, never one padded with barely noisy packages.
+  let noisiest = byNoise(all.filter((r) => settledAndNoisy(r, true)));
+  // A catalog of fresh publishes can leave no quiet package at all: then settled ones with a recent release, labelled so.
+  const noisyRecent = !noisiest.length;
+  if (noisyRecent) noisiest = byNoise(all.filter((r) => settledAndNoisy(r, false)));
+  return { examples, popular, noisiest, noisyRecent, rising: risingRows(all), showcase: pickShowcase(all, pairs), tops: categoryTops(all) };
 }
 
 // ---------- insights.json: what can be derived from the whole catalog ----------
@@ -410,7 +475,7 @@ interface Page {
   title: string;
   description: string;
   url: string;
-  body: string; // goes inside <main id="app">
+  body: string; // goes inside <div id="app">
   jsonLd?: unknown;
   noindex?: boolean;
 }
@@ -448,17 +513,21 @@ export function notFoundHtml(shell: string): string {
 // Inert stand-ins for the controls the SPA builds (search box, theme toggle), with the same classes and
 // sizes, so nothing moves when the app takes over (CLS). Hidden from assistive tech and not focusable.
 const searchStandIn = (id: 'top' | 'home', placeholder: string) =>
-  `<form class="search search-${id}" inert aria-hidden="true"><input type="text" placeholder="${placeholder}" /><button type="button">Look</button><p class="search-hint"></p></form>`;
-const headTools = `<div class="head-tools">${REPO_LINK_HTML}<span class="theme-toggle" inert aria-hidden="true">◐ system</span></div>`;
+  `<form class="search search-${id}" inert aria-hidden="true">${searchFormInner(id, placeholder, 'Look')}<p class="search-hint"></p></form>`;
 
-const masthead = (base: string) =>
-  `<header class="masthead"><a class="logo" href="${esc(base)}">human<span>loads</span></a>${searchStandIn('top', 'search a package…')}${headTools}</header>`;
+// Header, page body and footer, the same frame the SPA builds in src/web/main.ts.
+const frame = (base: string, active: NavKey, main: string, mainClass = 'page wrap', search = true) =>
+  `<div class="view">${siteHeaderHtml(base, active, search ? searchStandIn('top', 'Search packages') : '', STATIC_TOOLS)}<main class="${mainClass}">${main}</main>${siteFooterHtml(base)}</div>`;
+const navOf = (path: string): NavKey => (path.startsWith('lists/') ? 'rankings' : path === METHODOLOGY_PATH ? 'methodology' : 'journal');
 
 const METHOD_STEPS = `<ol>
-        <li>Cut the spike every new version gets from mirrors in its first days.</li>
-        <li>Subtract the flat floor robots download from <em>every</em> version each week.</li>
+        <li>Cut the spike every new version gets from mirrors and scanners in its first days.</li>
+        <li>Subtract the crawler floor: the flat count crawlers download from <em>every</em> version each week.</li>
         <li>Show what is left as a range, with a confidence level. It still includes CI and dependency installs, so it is not a count of people.</li>
       </ol>`;
+
+// The site's author, for the Dataset and article JSON-LD.
+const AUTHOR = { '@type': 'Person', name: 'Yevhenii Dziza', url: 'https://github.com/ZenyaDAR' };
 
 function website(site: string) {
   return { '@type': 'WebSite', '@id': `${site}#website`, url: site, name: SITE_NAME, description: HOME_DESCRIPTION, inLanguage: 'en' };
@@ -487,9 +556,9 @@ export function prerenderHtml(
   const npmUrl = `https://www.npmjs.com/package/${name}`;
 
   const numbers = r
-    ? `${numberCardsHtml({ npm: r.npmWeekly, organic: r.organicWeekly, low: r.low, high: r.high, confidence: r.confidence, tooNew: r.tooNew })}
+    ? `${numberCardsHtml({ npm: r.npmWeekly, organic: r.organicWeekly, low: r.low, high: r.high, confidence: r.confidence, tooNew: r.tooNew }, null)}
       ${adoptionHtml(r.facts)}
-      <p class="fineprint">Snapshot from the daily build${asOf ? ` of ${esc(asOf)}` : ''}, last 7 days of npm data. With JavaScript on, this page recomputes it live from the npm API.</p>
+      <p class="fineprint">${esc(FILTERED_NOTE)} Snapshot from the daily build${asOf ? ` of ${esc(asOf)}` : ''}, last 7 days of npm data. With JavaScript on, this page recomputes it live from the npm API.</p>
       ${peopleAnswerHtml(name, { npm: r.npmWeekly, organic: r.organicWeekly, low: r.low, high: r.high, confidence: r.confidence, tooNew: r.tooNew })}
       ${r.facts ? factsHtml(name, r.facts, opts.insights?.market, r.npmWeekly) : ''}
       ${monthlyHtml(name, r.facts)}
@@ -499,21 +568,22 @@ export function prerenderHtml(
         <h2 class="section-title">What this page shows</h2>
         <p>npm's download count for ${esc(name)} includes every tarball fetch: registry mirrors, security scanners,
           CI pipelines and crawlers as well as people. This page fetches the last 12 months from the npm API and
-          removes the mirror spikes and the crawler floor, then shows the real installs as a weekly range with a confidence level.</p>
+          removes the mirror spikes and the crawler floor. What remains, CI and dependency installs included, is shown as real
+          installs: a weekly range with a confidence level.</p>
       </section>`;
 
   const related = (opts.related ?? []).filter((n) => n !== name);
-  const body = `<div class="view">
-    ${masthead(base)}
+  const body = frame(base, null, `
     <article class="pkg">
       <header class="pkg-head">
         <h1 tabindex="-1"><span class="pkg-name">${esc(name)}</span></h1>
         ${r?.description ? `<p class="pkg-desc">${esc(r.description)}</p>` : ''}
-        <ul class="pkg-links"><li><a href="${esc(npmUrl)}">npm</a></li></ul>
+        <ul class="pkg-links num"><li><a href="${esc(npmUrl)}">npm</a></li></ul>
         ${r?.facts?.deprecated ? deprecatedHtml(r.facts.deprecated) : ''}
       </header>
+      <div class="pkg-static">
       ${numbers}
-      <section>
+      <section class="insights">
         <h2 class="section-title">How the estimate works</h2>
         ${METHOD_STEPS}
         <p class="method"><a href="${esc(base + METHODOLOGY_PATH)}">Read the methodology <span aria-hidden="true">→</span></a></p>
@@ -521,14 +591,14 @@ export function prerenderHtml(
       ${compareLinksHtml(base, opts.comparisons ?? [], esc, `Compare ${name}`)}
       ${
         related.length
-          ? `<section>
+          ? `<section class="cmp-links-sec">
         <h2 class="section-title">Other packages</h2>
-        <ul class="ev-top">${related.map((n) => `<li><a class="tag" href="${esc(base + n)}">${esc(n)}</a></li>`).join('')}</ul>
+        <ul class="cmp-links">${related.map((n) => `<li><a class="tag" href="${esc(base + n)}">${esc(n)}</a></li>`).join('')}</ul>
       </section>`
           : ''
       }
-    </article>
-  </div>`;
+      </div>
+    </article>`);
 
   const ld = {
     '@context': 'https://schema.org',
@@ -559,66 +629,36 @@ export function prerenderHtml(
   return withPage(shell, { title, description, url, body, jsonLd: ld, noindex: !isIndexable(r) });
 }
 
-// Same markup as the SPA's home cards (src/web/home.ts), so the swap on boot looks alike.
-function homeCard(r: FeaturedRow, base: string): string {
-  return `<li><a class="fcard" href="${esc(base + r.name)}">
-    <span class="fcard-name">${esc(r.name)}</span>
-    <span class="fcard-tag">${Math.round(r.inflation * 100)}% noise</span>
-    ${r.description ? `<span class="fcard-desc">${esc(r.description)}</span>` : ''}
-    <span class="fcard-nums">
-      <s class="struck num"><span class="sr-only">npm says </span>${roundCount(r.npmWeekly)}</s>
-      <span class="fcard-human">≈ <mark>${range(r)}</mark> real installs</span>
-    </span>
-    ${noiseBar(r.inflation, ' noise-bar-mini')}
-    <span class="pill pill-${esc(r.confidence)}">${esc(r.confidence)}</span>
-  </a></li>`;
-}
-
 export interface Featured {
   generated?: string;
   examples?: string[];
   popular?: string[];
   noisiest?: FeaturedRow[];
+  noisyRecent?: boolean;
+  rising?: RisingRow[];
+  showcase?: Showcase | null;
+  tops?: Record<string, string>;
 }
 
 // index.html: the home page with its featured lists as static links, so crawlers find the package pages.
 export function homeHtml(shell: string, site: string, featured: Featured | null, pairs: string[][] = []): string {
   const base = new URL(site).pathname;
-  const noisiest = featured?.noisiest?.length
-    ? `<section class="fcards-sec">
-        <h2 class="section-title">${NOISIEST_TITLE} <span class="fcards-note hand">${NOISIEST_NOTE}</span></h2>
-        <ul class="fcards">${featured.noisiest.slice(0, 6).map((r) => homeCard(r, base)).join('')}</ul>
-        <p class="fineprint">${NOISIEST_CAPTION}</p>
-      </section>`
-    : '';
+  const noisiest = featured?.noisiest?.slice(0, HOME_NOISY_SIZE) ?? [];
   const asOf = day(featured?.generated);
-  const body = `<div class="view">
-    <div class="home-top">${headTools}</div>
-    <section class="home">
-      <h1 class="home-title" tabindex="-1">human<span class="home-title-mark">loads</span></h1>
-      <p class="home-pitch">${HOME_PITCH}</p>
-      <div class="home-search">${searchStandIn('home', 'package name, e.g. zod')}</div>
-      ${
-        featured?.examples?.length
-          ? `<p class="home-examples"><span class="hand">try one</span>
-        ${featured.examples.slice(0, 4).map((n) => `<a class="tag" href="${esc(base + n)}">${esc(n)}</a>`).join('')}</p>`
-          : ''
-      }
-    </section>
-    <div class="featured">
-      ${noisiest}
-      ${popularHtml(base, featured?.popular ?? [])}
-      ${asOf ? `<p class="fineprint">Updated ${esc(asOf)}. Weekly numbers, last 7 days.</p>` : ''}
-    </div>
-    ${compareLinksHtml(base, pairs.slice(0, HOME_COMPARE_SIZE), esc)}
-    ${listLinksHtml(base)}
-    <aside class="home-note">
-      <p class="hand">how it works</p>
-      ${METHOD_STEPS}
-      <p><a href="${esc(base + METHODOLOGY_PATH)}">Read the methodology</a></p>
-    </aside>
-    ${homeFaqHtml(base)}
-  </div>`;
+  const body = frame(
+    base,
+    null,
+    `${heroHtml(base, searchStandIn('home', 'Search npm packages'), examplesHtml(base, featured?.examples?.slice(0, EXAMPLES_SIZE) ?? []), noisiest.length ? pinnedCardHtml(base, pinnedRow(noisiest)) : '')}
+    ${howHtml(base)}
+    ${notebookHtml(base, noisiest, asOf ?? '', featured?.rising ?? [], featured?.noisyRecent)}
+    ${compareSectionHtml(base, pairs.slice(0, HOME_COMPARE_SIZE), featured?.showcase ?? null)}
+    ${journalHtml(base)}
+    ${categoriesHtml(base, featured?.tops)}
+    ${popularHtml(base, featured?.popular ?? [])}
+    ${homeFaqHtml(base)}`,
+    'page page-home',
+    false,
+  );
   const ld = {
     '@context': 'https://schema.org',
     '@graph': [
@@ -629,11 +669,12 @@ export function homeHtml(shell: string, site: string, featured: Featured | null,
         name: 'npm download stats and real installs',
         description:
           'Weekly npm download counts next to real installs: what remains after removing publish spikes from registry ' +
-          'mirrors and scanners, and the crawler floor. Part of the catalog is refreshed daily from the public npm downloads API.',
+          'mirrors and scanners, and the crawler floor. CI and dependency installs remain, so it is not a count of people. ' +
+          'Part of the catalog is refreshed daily from the public npm downloads API.',
         url: site,
         isAccessibleForFree: true,
         license: 'https://github.com/ZenyaDAR/humanloads/blob/main/LICENSE',
-        creator: { '@type': 'Person', name: 'Yevhenii Dziza', url: 'https://github.com/ZenyaDAR' },
+        creator: AUTHOR,
         keywords: ['npm', 'downloads', 'bot traffic', 'package popularity'],
         measurementTechnique: 'Publish-spike removal and per-version crawler floor subtraction',
         variableMeasured: ['npm weekly downloads', 'estimated weekly real installs', 'confidence'],
@@ -648,8 +689,6 @@ export function homeHtml(shell: string, site: string, featured: Featured | null,
   };
   return withPage(shell, { title: HOME_TITLE, description: HOME_DESCRIPTION, url: site, body, jsonLd: ld });
 }
-
-const COMPARE_COLORS = ['--marker', '--berry', '--green']; // same as src/web/compare.ts
 
 // compare/<a>,<b>.html: a popular pair with the build-time numbers side by side; the SPA then draws the chart.
 export function compareHtml(
@@ -699,13 +738,12 @@ export function compareHtml(
       <p class="fineprint">Snapshot from the daily build${asOf ? ` of ${esc(asOf)}` : ''}, last 7 days of npm data. With JavaScript on, this page recomputes it live with a 12-month chart.</p>`
     : '';
 
-  const body = `<div class="view">
-    ${masthead(base)}
+  const body = frame(base, 'compare', `
     <article class="pkg compare">
-      <header class="pkg-head"><h1 tabindex="-1">${names.map((n) => `<span class="pkg-name">${esc(n)}</span>`).join(' <span class="vs hand">vs</span> ')}</h1></header>
-      <figure class="chart-fig">
+      <header class="pkg-head"><h1 tabindex="-1">${names.map((n) => `<span class="pkg-name">${esc(n)}</span>`).join(' <span class="vs">vs</span> ')}</h1></header>
+      <figure class="chart-card">
         <figcaption>
-          <h2 class="section-title">Real installs, week by week</h2>
+          <h2 class="panel-title">Real installs, week by week</h2>
           <ul class="legend">
             ${names.map((n, i) => `<li><span class="key key-line" style="--c:var(${COMPARE_COLORS[i]})" aria-hidden="true"></span>${esc(n)}</li>`).join('')}
             <li><span class="key key-npm" aria-hidden="true"></span>npm downloads (same color, dashed)</li>
@@ -714,19 +752,18 @@ export function compareHtml(
         <div class="sk sk-chart" aria-hidden="true"></div>
         <p class="fineprint">The 12-month chart is drawn in the browser from the npm API.</p>
       </figure>
-      <section class="versions">
+      <section class="panel compare-table">
         <h2 class="section-title">${vs}: which is more popular?</h2>
         ${table}
-        ${answer || `<p>npm's weekly download counts for ${vs}, with mirror spikes and crawler traffic removed, week by week.</p>`}
+        ${answer || `<p>npm's weekly download counts for ${vs}, with mirror spikes and the crawler floor removed, week by week.</p>`}
       </section>
-      <section>
+      <section class="insights">
         <h2 class="section-title">How the estimate works</h2>
         ${METHOD_STEPS}
         <p class="method"><a href="${esc(base + METHODOLOGY_PATH)}">Read the methodology <span aria-hidden="true">→</span></a></p>
       </section>
       ${compareLinksHtml(base, opts.others ?? [], esc, 'More comparisons')}
-    </article>
-  </div>`;
+    </article>`);
 
   const ld = {
     '@context': 'https://schema.org',
@@ -758,11 +795,15 @@ export function compareHtml(
   return withPage(shell, { title, description, url, body, jsonLd: ld, noindex: !known });
 }
 
+// The article's "Check your own package" box: the hero search look, inert until the SPA swaps in a live one.
+const withArticleSearch = (body: string) =>
+  body.replace(ARTICLE_SEARCH_SLOT, `<div class="art-search"><form class="search search-home" inert aria-hidden="true">${searchFormInner('art', 'your-package-name', 'Look')}<p class="search-hint"></p></form></div>`);
+
 // docs/methodology.html: the English methodology, as an article with an FAQ.
 export function methodologyHtml(shell: string, site: string, modified?: string): string {
   const base = new URL(site).pathname;
   const url = site + METHODOLOGY_PATH;
-  const body = `<div class="view">${masthead(base)}${methodologyBody(base)}</div>`;
+  const body = frame(base, 'methodology', withArticleSearch(methodologyBody(base)));
   const ld = {
     '@context': 'https://schema.org',
     '@graph': [
@@ -776,6 +817,7 @@ export function methodologyHtml(shell: string, site: string, modified?: string):
         inLanguage: 'en',
         isPartOf: { '@id': `${site}#website` },
         breadcrumb: { '@id': `${url}#breadcrumb` },
+        author: AUTHOR,
         about: ['npm download counts', 'bot traffic', 'package popularity'],
         articleSection: METHODOLOGY_SECTIONS.map(([, t]) => t),
         ...(modified && { dateModified: modified }),
@@ -799,15 +841,41 @@ export function methodologyHtml(shell: string, site: string, modified?: string):
 }
 
 // docs/<guide>.html: a short answer to one plain question.
-export function guideHtml<T>(shell: string, site: string, guide: Guide<T>, data?: T | null): string {
+// `packages` (summary.json rows) feeds the "Mentioned in this article" cards; without it the rail skips them.
+export function guideHtml<T>(shell: string, site: string, guide: Guide<T>, data?: T | null, packages?: Record<string, FeaturedRow | undefined> | null): string {
   const base = new URL(site).pathname;
   const url = site + guide.path;
   const name = guide.title.replace(/ · .*$/, '');
+  // Only a guide built on nightly data changes with it; a static guide has no honest modification date here.
+  const modified = guide.ready ? (data as { generated?: string } | null | undefined)?.generated : undefined;
+  const items = guide.items?.(data) ?? [];
   const ld = {
     '@context': 'https://schema.org',
     '@graph': [
       website(site),
-      { '@type': 'TechArticle', '@id': url, url, headline: name, description: guide.description, inLanguage: 'en', isPartOf: { '@id': `${site}#website` }, breadcrumb: { '@id': `${url}#breadcrumb` } },
+      {
+        '@type': 'TechArticle',
+        '@id': url,
+        url,
+        headline: name,
+        description: guide.description,
+        inLanguage: 'en',
+        author: AUTHOR,
+        isPartOf: { '@id': `${site}#website` },
+        breadcrumb: { '@id': `${url}#breadcrumb` },
+        ...(modified && { dateModified: modified }),
+        ...(items.length > 0 && { mainEntity: { '@id': `${url}#list` } }),
+      },
+      ...(items.length
+        ? [{
+            '@type': 'ItemList',
+            '@id': `${url}#list`,
+            name,
+            itemListOrder: 'https://schema.org/ItemListOrderDescending',
+            numberOfItems: items.length,
+            itemListElement: items.map((n, i) => ({ '@type': 'ListItem', position: i + 1, url: site + n })),
+          }]
+        : []),
       {
         '@type': 'BreadcrumbList',
         '@id': `${url}#breadcrumb`,
@@ -822,7 +890,7 @@ export function guideHtml<T>(shell: string, site: string, guide: Guide<T>, data?
     title: guide.title,
     description: guide.description,
     url,
-    body: `<div class="view">${masthead(base)}${guide.body(base, data)}</div>`,
+    body: frame(base, navOf(guide.path), withArticleSearch(guide.body(base, data, pickMentions(guide.mentions, packages)))),
     jsonLd: ld,
     noindex: guide.ready ? !guide.ready(data) : false,
   });
@@ -892,9 +960,10 @@ export function llmsTxt(site: string, pages: { name: string; row?: FeaturedRow }
 
 - Every new version gets a burst of downloads from mirrors and scanners in its first days; that spike is removed.
 - Crawlers download every published version at a roughly flat weekly rate (the per-version floor); that floor is subtracted.
-- What remains is reported as a weekly range with a confidence level (high, medium or low). Small packages get wide, low-confidence ranges.
+- What remains is reported as a weekly range with a confidence level (high, medium or low) for the noise filter. Small packages often get wide, low-confidence ranges.
 - "high" also needs independent evidence of use (dependent packages or repositories, jsDelivr CDN hits). Direct tarball requests pass both filters, so volume alone never earns it.
 - Packages under two weeks old are marked as too new to tell.
+- npm publishes its data 1–2 days late. Traffic served by private registry mirrors never reaches npm. The estimate has not been validated against packages with a known audience.
 - [Full methodology](${site}${METHODOLOGY_PATH}): the math, the thresholds, the limits and an FAQ
 ${GUIDES.map((g) => `- [${g.title.replace(/ · .*$/, '')}](${site}${g.path})`).join('\n')}
 

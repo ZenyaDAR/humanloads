@@ -1,27 +1,30 @@
-import { awaitingEvidence, estimate } from '../core/estimate.ts';
-import { fetchEvidence, fetchPackageData } from '../core/sources.ts';
+import { addDays, awaitingEvidence, estimate } from '../core/estimate.ts';
+import { fetchEvidence, fetchPackageData, isValidPackageName, parseGithubRepo } from '../core/sources.ts';
 import {
   PackageNotFoundError, type Calibration, type Estimate, type Evidence, type InsightsFile, type ListsFile, type RawPackageData, type RegistryDoc, type ShieldsBadge,
 } from '../core/types.ts';
 import { badgeOf } from '../core/badge.ts';
-import { adoptionHtml, chainHtml, factsHtml, monthlyHtml, packageFacts } from '../core/insights.ts';
-import { LISTS_FILE, LIST_NAMES, categoryRankHtml } from '../core/lists.ts';
-import { REPO_URL, peopleAnswerHtml, deprecatedHtml, numberCardsHtml } from '../core/seo.ts';
+import { chainHtml, factsHtml, maintainedPanelHtml, monthlyHtml, packageFacts, type PackageFacts } from '../core/insights.ts';
+import { LISTS_FILE, LIST_NAMES, categoryRankHtml, categoryRankLineHtml } from '../core/lists.ts';
+import { checkMark } from '../core/layout.ts';
+import { GUIDES } from '../core/guides.ts';
+import { FILTERED_NOTE, REPO_URL, comparePath, peopleAnswerHtml, deprecatedHtml, numberCardsHtml } from '../core/seo.ts';
 import { mountChart } from './chart.ts';
 import { searchBox } from './home.ts';
 import {
-  BADGE_API, BASE, SITE_URL, esc, fetchStatic, fmt, fmtCompact, METHODOLOGY_URL, navigate, pkgHref, safeName, safeUrl, setPageMeta, timeAgo,
+  BADGE_API, BASE, SITE_URL, esc, fetchStatic, fmt, fmtCompact, fmtDate, METHODOLOGY_URL, navigate, pkgHref, safeName, safeUrl, setPageMeta, timeAgo,
 } from './util.ts';
-import { compareLinksHtml } from '../core/seo.ts';
 import COMPARE_PAIRS from '../../data/compare.json';
 
 const CACHE_TTL = 60 * 60 * 1000;
+const CACHE_PREFIX = 'humanloads:v2:'; // v2: the registry doc carries readme, dependencies and package facts
 const VISIBLE_VERSIONS = 12;
 const TRACKED_URL = `${REPO_URL}/blob/main/data/tracked.json`;
+const JOURNAL_GUIDE = GUIDES.find((g) => g.path === 'docs/are-npm-downloads-real') ?? GUIDES[0];
 
 function readCache(name: string): RawPackageData | null {
   try {
-    const hit = JSON.parse(sessionStorage.getItem(`humanloads:${name}`) ?? 'null');
+    const hit = JSON.parse(sessionStorage.getItem(CACHE_PREFIX + name) ?? 'null');
     // Ignore entries with an unexpected shape (older builds, manual edits).
     const ok =
       Array.isArray(hit?.data?.downloads) && hit.data.registry && typeof hit.data.versionsLastWeek === 'object';
@@ -33,7 +36,7 @@ function readCache(name: string): RawPackageData | null {
 
 function writeCache(name: string, data: RawPackageData): void {
   try {
-    sessionStorage.setItem(`humanloads:${name}`, JSON.stringify({ t: Date.now(), data }));
+    sessionStorage.setItem(CACHE_PREFIX + name, JSON.stringify({ t: Date.now(), data }));
   } catch {
     // Storage disabled or full: caching is optional.
   }
@@ -54,8 +57,10 @@ export async function calibration(): Promise<Calibration | undefined> {
   return c && typeof c.floorPerVersion === 'number' ? c : undefined;
 }
 
-export function renderPackage(view: HTMLElement, name: string): void {
-  void load(view, name, false);
+// staticBody: the prerendered page body, shown instead of the skeleton and kept if the npm API fails.
+export function renderPackage(view: HTMLElement, name: string, staticBody?: string): void {
+  if (staticBody) view.innerHTML = staticBody;
+  void load(view, name, false, !!staticBody);
 }
 
 // Replace the view's content; if its h1 (the skeleton's, after a route change) had focus, move focus
@@ -67,33 +72,30 @@ function paint(view: HTMLElement, html: string): void {
   if (hadFocus) view.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
 }
 
-async function load(view: HTMLElement, name: string, force: boolean): Promise<void> {
+async function load(view: HTMLElement, name: string, force: boolean, hasStatic = false): Promise<void> {
   try {
-    if (force || !readCache(name)) paint(view, skeleton(name));
+    if (!hasStatic && (force || !readCache(name))) paint(view, skeleton(name));
     const [data, cal, insights] = await Promise.all([getData(name, force), calibration(), fetchStatic<InsightsFile>('data/insights.json')]);
     if (!view.isConnected) return; // user navigated away while we were fetching
 
     const est = estimate(data, { calibration: cal });
     const total = est.daily.reduce((s, d) => s + d.npm, 0);
+    const facts = packageFacts(data, est);
     paint(
       view,
       `
     <article class="pkg">
       ${header(data.registry, name)}
-      ${total === 0 ? zero(name) : body(est, name, data, insights)}
-      <section class="evidence" aria-busy="true" aria-labelledby="ev-title">
-        <h2 class="section-title" id="ev-title">Independent evidence of use</h2>
-        <p class="evidence-lede hand">checking dependents, CDN and GitHub…</p>
-      </section>
-      <div class="tools">
-        <section class="compare-with" aria-labelledby="cmp-title"><h2 class="section-title" id="cmp-title">Compare with…</h2></section>
-        <section class="badge-box" hidden></section>
+      <div class="pkg-grid">
+        <div class="pkg-main">
+          ${total === 0 ? zero(name) : body(est, name, data.registry, facts, insights)}
+        </div>
+        ${sidebar(data.registry, name, facts)}
       </div>
-      ${compareLinksHtml(BASE, COMPARE_PAIRS.filter((p) => p.includes(name)), esc, `Compare ${name}`)}
-      <p class="method"><a href="${METHODOLOGY_URL}">How we filter this <span aria-hidden="true">→</span></a></p>
     </article>`,
     );
-    view.querySelector('.compare-with')!.append(
+    // The box goes right under the title, above the ready-made "vs" links.
+    view.querySelector('.compare-with .sheet-title')!.after(
       searchBox('cmp', {
         label: `Package to compare with ${name}`,
         placeholder: 'another package…',
@@ -101,18 +103,27 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
         onPick: (other) => other !== name && navigate(`${BASE}compare/${name},${other}`),
       }),
     );
+    wireInstall(view.querySelector<HTMLElement>('.install')!, name);
+    wireTabs(view, { readme: () => void fillReadme(view.querySelector<HTMLElement>('.readme')!, data.registry) });
     // The badge preview follows the estimate: evidence below can raise confidence, as the badge service does.
     let latest = est;
     void badge(view.querySelector<HTMLElement>('.badge-box')!, name, () => latest);
     // After paint, and only for packages in a list: lists.json is not needed for anything else on this page.
-    const rankSlot = view.querySelector<HTMLElement>('.rank-slot');
-    if (rankSlot) {
+    if (LIST_NAMES.includes(name)) {
       void fetchStatic<ListsFile>(LISTS_FILE).then((lists) => {
-        if (rankSlot.isConnected) rankSlot.outerHTML = categoryRankHtml(name, lists, BASE);
+        const rankSlot = view.querySelector<HTMLElement>('.rank-slot');
+        if (rankSlot) rankSlot.outerHTML = categoryRankHtml(name, lists, BASE);
+        view.querySelector('#mt-h')?.parentElement?.insertAdjacentHTML('beforeend', categoryRankLineHtml(name, lists, BASE));
       });
     }
     if (total > 0) {
-      mountChart(view.querySelector<HTMLElement>('.chart')!, [{ est, label: name, color: '--marker' }]);
+      const setRange = mountChart(view.querySelector<HTMLElement>('.chart')!, [{ est, label: name, color: '--blue' }]);
+      view.querySelectorAll<HTMLButtonElement>('.range button').forEach((b) =>
+        b.addEventListener('click', () => {
+          view.querySelectorAll('.range button').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+          setRange(Number(b.dataset.weeks));
+        }),
+      );
       const more = view.querySelector<HTMLButtonElement>('.versions-more');
       more?.addEventListener('click', () => {
         view.querySelectorAll<HTMLElement>('tr[hidden]').forEach((tr) => (tr.hidden = false));
@@ -127,13 +138,12 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
       const ev = await fetchEvidence(name, data.registry);
       if (!view.isConnected) return;
       fillEvidence(evHost, ev);
+      const count = view.querySelector('#tab-dependents .tab-count');
+      if (count && ev.dependentPackages != null) count.textContent = fmtCompact(ev.dependentPackages);
       latest = estimate(data, { calibration: cal, evidence: ev });
       const cardsEl = view.querySelector('.cards');
-      if (cardsEl) {
-        const open = cardsEl.querySelector<HTMLDetailsElement>('.why')?.open; // keep the disclosure as the reader left it
-        cardsEl.outerHTML = cards(latest);
-        if (open) view.querySelector<HTMLDetailsElement>('.why')!.open = true;
-      }
+      if (cardsEl) cardsEl.outerHTML = cards(latest, false, ev);
+      fillEvidenceFacts(view, ev);
       const live = view.querySelector('.badge-box .shield[data-live]');
       if (live) live.outerHTML = shieldHtml(badgeOf(latest), true);
     } catch {
@@ -143,7 +153,7 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
       const lede = evHost.querySelector('.evidence-lede');
       if (lede) {
         lede.className = 'evidence-lede';
-        lede.textContent = 'Usage evidence is unavailable right now.';
+        lede.textContent = 'Could not load dependents, CDN and GitHub data. Reload the page to try again.';
       }
     }
   } catch (err) {
@@ -163,6 +173,8 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
             }</p>
           </section>`,
       );
+    } else if (hasStatic) {
+      return; // the prerendered snapshot stays: older numbers beat an error page
     } else {
       paint(
         view,
@@ -179,32 +191,46 @@ async function load(view: HTMLElement, name: string, force: boolean): Promise<vo
   }
 }
 
+// Same boxes as the real page, so it doesn't jump when the data arrives.
 function skeleton(name: string): string {
   return `
     <div class="skeleton" aria-busy="true" role="status">
       <h1 class="hand" tabindex="-1">measuring ${esc(name)}…</h1>
       <div class="sk sk-line"></div>
-      <div class="sk-cards"><div class="sk sk-card"></div><div class="sk sk-card"></div></div>
-      <div class="sk sk-chart"></div>
+      <div class="row-a"><div class="sk sk-card"></div><div class="sk sk-chart"></div></div>
     </div>`;
 }
 
 function header(reg: RegistryDoc, name: string): string {
   const version = reg['dist-tags'].latest;
+  const published = version && typeof reg.time[version] === 'string' ? timeAgo(reg.time[version] as string) : '';
   const repo = safeUrl(typeof reg.repository === 'string' ? reg.repository : reg.repository?.url);
   const home = safeUrl(reg.homepage);
+  const deps = Object.keys(reg.dependencies ?? {}).length;
+  const by = reg.publisher ? ` by <a href="${esc(npmUser(reg.publisher))}">${esc(reg.publisher)}</a>` : '';
   const links = [
     reg.license ? `<li>${esc(reg.license)}</li>` : '',
-    `<li><a href="https://www.npmjs.com/package/${esc(name)}">npm</a></li>`,
+    version ? `<li>${fmt(deps)} ${deps === 1 ? 'dependency' : 'dependencies'}</li>` : '',
+    reg.types ? '<li>types included</li>' : '',
+    reg.moduleFormats?.length ? `<li>${reg.moduleFormats.map((f) => f.toUpperCase()).join(' + ')}</li>` : '',
     repo ? `<li><a href="${esc(repo)}">${new URL(repo).hostname === 'github.com' ? 'github' : 'repository'}</a></li>` : '',
-    home && home !== repo && !home.startsWith(`${repo}#`) ? `<li><a href="${esc(home)}">homepage</a></li>` : '',
+    home && home !== repo && !home.startsWith(`${repo}#`) ? `<li><a href="${esc(home)}">${esc(new URL(home).hostname.replace(/^www\./, ''))}</a></li>` : '',
   ];
   return `
     <header class="pkg-head">
-      <h1 tabindex="-1"><span class="pkg-name">${esc(name)}</span>${version ? ` <span class="pkg-ver">v${esc(version)}</span>` : ''}</h1>
-      ${reg.description ? `<p class="pkg-desc">${esc(reg.description)}</p>` : ''}
-      <ul class="pkg-links">${links.join('')}</ul>
-      ${reg.deprecated ? deprecatedHtml(reg.deprecated) : ''}
+      <div class="pkg-title">
+        <div class="pkg-titleline">
+          <h1 tabindex="-1"><span class="pkg-name">${esc(name)}</span>${version ? ` <span class="pkg-ver num">${esc(version)}</span>` : ''}</h1>
+          ${published ? `<p class="pkg-meta">latest · published ${esc(published)}${by}</p>` : ''}
+        </div>
+        ${reg.description ? `<p class="pkg-desc">${esc(reg.description)}</p>` : ''}
+        <ul class="pkg-links num">${links.join('')}</ul>
+        ${reg.deprecated ? deprecatedHtml(reg.deprecated) : ''}
+      </div>
+      <div class="pkg-actions">
+        <a class="btn-line" href="#compare-with">Compare</a>
+        <a class="btn-line btn-line-b" href="#badge">README badge</a>
+      </div>
     </header>`;
 }
 
@@ -213,48 +239,144 @@ function zero(name: string): string {
     <section class="state state-zero">
       <p class="hand big-note">Nobody downloaded ${esc(name)} in the last year. Not even the robots.</p>
       <p>npm reports 0 downloads, so there is nothing to estimate yet.</p>
-    </section>`;
+    </section>
+    ${usagePanel(true)}`;
 }
 
-function body(est: Estimate, name: string, data: RawPackageData, insights: InsightsFile | null): string {
-  const lastDay = est.daily[est.daily.length - 1]?.day;
-  const facts = packageFacts(data, est);
-  return `
-    ${cards(est, awaitingEvidence(est))}
-    ${adoptionHtml(facts)}
-    ${lastDay ? `<p class="fineprint">Last 7 days of npm data, through ${esc(lastDay)}. npm publishes counts 1–2 days late.</p>` : ''}
+const RANGES: [number, string][] = [[13, '3 mo'], [26, '6 mo'], [52, '1 yr']];
 
-    <figure class="chart-fig">
-      <figcaption>
-        <h2 class="section-title">Twelve months, week by week</h2>
+function body(est: Estimate, name: string, reg: RegistryDoc, facts: PackageFacts | undefined, insights: InsightsFile | null): string {
+  const monthly = monthlyHtml(name, facts);
+  const tabs: [string, string, string][] = [
+    ['readme', 'Readme', ''],
+    ['versions', 'Versions', est.versions.length ? fmt(est.versions.length) : ''],
+    ['dependencies', 'Dependencies', fmt(Object.keys(reg.dependencies ?? {}).length)],
+    ['dependents', 'Dependents', ''],
+    ...(monthly ? [['monthly', 'Monthly', String(facts?.monthly?.months.length ?? '')] as [string, string, string]] : []),
+    ['about', 'About', ''],
+  ];
+  return `
+    <div class="row-a">
+      ${cards(est, awaitingEvidence(est))}
+      <figure class="chart-card">
+        <figcaption>
+          <h2 class="panel-title">Twelve months, week by week</h2>
+          <div class="range" role="group" aria-label="Chart range">${RANGES.map(([w, l]) => `<button type="button" data-weeks="${w}" aria-pressed="${w === 52}">${l}</button>`).join('')}</div>
+        </figcaption>
+        <div class="chart"></div>
         <ul class="legend">
           <li><span class="key key-npm" aria-hidden="true"></span>npm downloads</li>
           <li><span class="key key-human" aria-hidden="true"></span>real installs</li>
           <li><span class="key key-band" aria-hidden="true"></span>likely range</li>
-          <li><span class="key key-note" aria-hidden="true">v1</span>new version published</li>
+          <li><span class="key key-note" aria-hidden="true">v1</span>release, then mirrors copy it</li>
+          <li class="legend-end">square-root scale</li>
         </ul>
-      </figcaption>
-      <div class="chart"></div>
-      <p class="fineprint">The vertical scale is square-root, so small numbers stay visible next to big spikes. Real installs in past weeks are this week's share applied to the spike-free count, not separate measurements.</p>
-    </figure>
+      </figure>
+    </div>
 
-    ${peopleAnswerHtml(name, { npm: est.lastWeek.npm, organic: est.lastWeek.organic, low: est.lastWeek.low, high: est.lastWeek.high, confidence: est.confidence, tooNew: est.tooNew })}
-    ${facts ? factsHtml(name, facts, insights?.market, est.lastWeek.npm) : ''}
-    ${monthlyHtml(name, facts)}
-    ${LIST_NAMES.includes(name) ? '<div class="rank-slot"></div>' : ''}
-    ${chainHtml(name, insights?.chains[name], BASE)}
-    ${breakdown(est)}
-    ${versions(est, name)}`;
+    <div class="strip">
+      ${versionShare(est)}
+      ${breakdown(est)}
+      ${maintainedPanelHtml(facts)}
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="Package details">${tabs
+      .map(
+        ([id, label, n], i) =>
+          `<button type="button" role="tab" id="tab-${id}" aria-controls="panel-${id}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${label} <span class="tab-count num">${n}</span></button>`,
+      )
+      .join('')}</div>
+    <div class="tab-panel" role="tabpanel" id="panel-readme" aria-labelledby="tab-readme"><article class="readme" aria-busy="true"><p class="evidence-lede hand">reading the README…</p></article></div>
+    <div class="tab-panel" role="tabpanel" id="panel-versions" aria-labelledby="tab-versions" hidden>${versions(est, name)}</div>
+    <div class="tab-panel" role="tabpanel" id="panel-dependencies" aria-labelledby="tab-dependencies" hidden>${dependencies(reg, name)}</div>
+    ${usagePanel(false)}
+    ${monthly ? `<div class="tab-panel" role="tabpanel" id="panel-monthly" aria-labelledby="tab-monthly" hidden>${monthly}</div>` : ''}
+    <div class="tab-panel" role="tabpanel" id="panel-about" aria-labelledby="tab-about" hidden>
+      ${peopleAnswerHtml(name, { npm: est.lastWeek.npm, organic: est.lastWeek.organic, low: est.lastWeek.low, high: est.lastWeek.high, confidence: est.confidence, tooNew: est.tooNew })}
+      ${whyHtml(est)}
+      ${facts ? factsHtml(name, facts, insights?.market, est.lastWeek.npm) : ''}
+      ${LIST_NAMES.includes(name) ? '<div class="rank-slot"></div>' : ''}
+      ${chainHtml(name, insights?.chains[name], BASE)}
+      <p class="method"><a href="${METHODOLOGY_URL}">How we filter this <span aria-hidden="true">→</span></a></p>
+    </div>`;
 }
 
-// The two number cards. Re-rendered on its own once evidence arrives (confidence and notes may change).
-function cards(est: Estimate, checking = false): string {
+function usagePanel(standalone: boolean): string {
+  const evidence = `<section class="evidence" aria-busy="true" aria-labelledby="ev-title">
+        <h2 class="section-title" id="ev-title">Independent evidence of use</h2>
+        <p class="evidence-lede hand">checking dependents, CDN and GitHub…</p>
+      </section>`;
+  return standalone ? evidence : `<div class="tab-panel" role="tabpanel" id="panel-dependents" aria-labelledby="tab-dependents" hidden>${evidence}</div>`;
+}
+
+// Folder tabs with the ARIA tab pattern: click, or arrow keys between tabs. `lazy` fills a panel the first time
+// its tab is shown (the selected tab right away).
+function wireTabs(view: HTMLElement, lazy: Record<string, () => void>): void {
+  const tabs = [...view.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+  const select = (tab: HTMLButtonElement) => {
+    for (const t of tabs) {
+      const on = t === tab;
+      t.setAttribute('aria-selected', String(on));
+      t.tabIndex = on ? 0 : -1;
+      view.querySelector<HTMLElement>(`#${t.getAttribute('aria-controls')}`)!.hidden = !on;
+    }
+    const id = tab.id.replace(/^tab-/, '');
+    lazy[id]?.();
+    delete lazy[id];
+  };
+  const first = tabs.find((t) => t.getAttribute('aria-selected') === 'true');
+  if (first) select(first);
+  for (const [i, t] of tabs.entries()) {
+    t.addEventListener('click', () => select(t));
+    t.addEventListener('keydown', (e) => {
+      const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (!step) return;
+      const next = tabs[(i + step + tabs.length) % tabs.length];
+      select(next);
+      next.focus();
+    });
+  }
+}
+
+// The correction card. Re-rendered on its own once evidence arrives (confidence and notes may change).
+// The notes behind the estimate live in the About tab, so the card itself stays as short as the design's.
+function cards(est: Estimate, checking = false, ev?: Evidence): string {
   const w = est.lastWeek;
+  const html = numberCardsHtml({ npm: w.npm, organic: w.organic, low: w.low, high: w.high, confidence: est.confidence, tooNew: est.tooNew, checking }, null);
+  return html.replace(/<\/section>\s*$/, `${checksHtml(est, ev)}</section>`);
+}
+
+// "Why this estimate" for the About tab: what was removed, the filter's notes, the weekday rhythm, the data window.
+function whyHtml(est: Estimate): string {
+  const lastDay = est.daily.at(-1)?.day;
   const notes = est.notes.length ? `<ul class="notes">${est.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : '';
-  return numberCardsHtml(
-    { npm: w.npm, organic: w.organic, low: w.low, high: w.high, confidence: est.confidence, tooNew: est.tooNew, checking },
-    notes + rhythm(est),
-  );
+  return `<section class="why-sec">
+      <h2 class="section-title">Why this estimate</h2>
+      <p>${FILTERED_NOTE}</p>
+      ${notes}${rhythm(est)}
+      ${lastDay ? `<p class="fineprint">Last 7 days of npm data, through ${esc(lastDay)}. npm publishes counts 1–2 days late. In the chart, real installs in past weeks are this week's share applied to the spike-free count.</p>` : ''}
+    </section>`;
+}
+
+// Same cutoff as estimate.ts: the floor is measured on versions published over two weeks before the last day.
+function oldVersionCount(est: Estimate): number {
+  const last = est.daily.at(-1)?.day;
+  if (!last) return 0;
+  const cutoff = addDays(last, -14);
+  const day = new Map(est.publishes.flatMap((p) => p.versions.map((v) => [v, p.day] as const)));
+  return est.versions.filter((r) => (day.get(r.version) ?? cutoff) < cutoff).length;
+}
+
+// Evidence lines under the card: only the ones that are true, each with a green check.
+function checksHtml(est: Estimate, ev?: Evidence): string {
+  const n = (x: number) => `<span class="num">${fmtCompact(x)}</span>`;
+  const old = est.breakdown.crawlerFloorPerVersion !== null ? oldVersionCount(est) : 0;
+  const lines = [
+    old ? `crawler floor measured on ${n(old)} old versions` : '',
+    ev?.dependentPackages ? `${n(ev.dependentPackages)} ${ev.dependentPackages === 1 ? 'package depends' : 'packages depend'} on it` : '',
+    ev?.cdnHitsMonth ? `${n(ev.cdnHitsMonth)} jsDelivr hits last month` : '',
+  ].filter(Boolean);
+  return lines.length ? `<ul class="corr-checks">${lines.map((l) => `<li>${checkMark('tick-ok')}<span>${l}</span></li>`).join('')}</ul>` : '';
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -289,6 +411,238 @@ function rhythm(est: Estimate): string {
     </p>`;
 }
 
+// ---------- sidebar: install, facts, badge, compare ----------
+
+const PMS: [string, (n: string) => string][] = [
+  ['npm', (n) => `npm i ${n}`],
+  ['pnpm', (n) => `pnpm add ${n}`],
+  ['yarn', (n) => `yarn add ${n}`],
+  ['bun', (n) => `bun add ${n}`],
+];
+
+function sidebar(reg: RegistryDoc, name: string, f: PackageFacts | undefined): string {
+  const repo = safeUrl(typeof reg.repository === 'string' ? reg.repository : reg.repository?.url);
+  // [label, value, key]: rows with a key and no value wait hidden for the evidence (fillEvidenceFacts).
+  const rows: [string, string, string?][] = [
+    ...(reg['dist-tags'].latest ? [['Version', esc(reg['dist-tags'].latest)] as [string, string]] : []),
+    ...(reg.license ? [['License', esc(reg.license)] as [string, string]] : []),
+    ...(reg.unpackedSize ? [['Unpacked size', fmtBytes(reg.unpackedSize)] as [string, string]] : []),
+    ...(reg.fileCount ? [['Total files', fmt(reg.fileCount)] as [string, string]] : []),
+    ...(repo ? [['Repository', `<a href="${esc(repo)}">${esc(repo.replace(/^https?:\/\/(www\.)?/, ''))}</a>`] as [string, string]] : []),
+    ['GitHub', '', 'github'],
+    ['Dependent repos', '', 'repos'],
+    ...(f?.lastPublish ? [['Last publish', `<span title="${esc(fmtDate(f.lastPublish))}">${esc(timeAgo(f.lastPublish))}</span>`] as [string, string]] : []),
+    ...(reg.maintainers?.length
+      ? [['Maintainers', avatars(reg.maintainers)] as [string, string]]
+      : f?.maintainers
+        ? [['Maintainers', fmt(f.maintainers)] as [string, string]]
+        : []),
+  ];
+  const pairs = COMPARE_PAIRS.filter((p) => p.includes(name)).slice(0, 4);
+  return `
+    <aside class="pkg-side" aria-label="Package facts">
+      <div class="sheet">
+        <div class="sheet-sec install">
+          <div class="sheet-row"><h2 class="sheet-title">Install</h2>
+            <span class="pm" role="group" aria-label="Package manager">${PMS.map(([pm], i) => `<button type="button" class="num" aria-pressed="${i === 0}">${pm}</button>`).join('')}</span></div>
+          <div class="cmd"><code class="num"><span aria-hidden="true">&gt; </span><span class="cmd-text">${esc(PMS[0][1](name))}</span></code>
+            <button type="button" class="copy" aria-label="Copy install command"><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg></button></div>
+          <p class="sr-only" aria-live="polite" data-copy-status></p>
+        </div>
+        <div class="sheet-sec"><dl class="facts">${rows.map(([k, v, key]) => `<div${key ? ` data-fact="${key}" hidden` : ''}><dt>${k}</dt><dd class="num">${v}</dd></div>`).join('')}</dl></div>
+        <div class="sheet-sec badge-box" id="badge" hidden></div>
+        <div class="sheet-sec compare-with" id="compare-with">
+          <h2 class="sheet-title">Compare with…</h2>
+          ${pairs.length ? `<p class="vs-links num">${pairs.map((p) => `<a class="quiet-link" href="${esc(BASE + comparePath(p))}">vs ${p.filter((n) => n !== name).map(esc).join(', ')}</a>`).join('')}</p>` : ''}
+        </div>
+      </div>
+      <a class="from-journal" href="${esc(BASE + JOURNAL_GUIDE.path)}"><span class="hand">from the journal</span><span class="fj-title">${esc(JOURNAL_GUIDE.title.replace(/ · .*$/, ''))} <span aria-hidden="true">→</span></span></a>
+    </aside>`;
+}
+
+// The sidebar rows that come from the evidence sources; a source that did not answer leaves its row hidden.
+function fillEvidenceFacts(view: HTMLElement, ev: Evidence): void {
+  const set = (key: string, html: string) => {
+    const row = view.querySelector<HTMLElement>(`[data-fact="${key}"]`);
+    if (!row) return;
+    row.querySelector('dd')!.innerHTML = html;
+    row.hidden = false;
+  };
+  if (ev.github) set('github', `★ ${esc(fmtCompact(ev.github.stars))} · ${esc(fmtCompact(ev.github.forks))} forks`);
+  if (ev.dependentRepos != null) set('repos', esc(fmtCompact(ev.dependentRepos)));
+}
+
+function wireInstall(host: HTMLElement, name: string): void {
+  const text = host.querySelector<HTMLElement>('.cmd-text')!;
+  const status = host.querySelector<HTMLElement>('[data-copy-status]')!;
+  const buttons = [...host.querySelectorAll<HTMLButtonElement>('.pm button')];
+  buttons.forEach((b, i) =>
+    b.addEventListener('click', () => {
+      buttons.forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+      text.textContent = PMS[i][1](name);
+    }),
+  );
+  host.querySelector('.copy')!.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(text.textContent ?? '');
+      status.textContent = 'Copied.';
+    } catch {
+      getSelection()?.selectAllChildren(text); // no Clipboard API: select it so Ctrl+C works
+      status.textContent = 'Selected. Press Ctrl+C to copy.';
+    }
+  });
+}
+
+const npmUser = (name: string) => `https://www.npmjs.com/~${encodeURIComponent(name)}`;
+
+// npm's own units: 1 kB = 1000 bytes.
+function fmtBytes(n: number): string {
+  return n < 1000 ? `${fmt(n)} B` : n < 1e6 ? `${Math.round(n / 1000)} kB` : `${(n / 1e6).toFixed(1)} MB`;
+}
+
+const MAX_AVATARS = 5;
+
+// "colinhacks" -> "CO", "sindre-sorhus" -> "SS".
+function initials(name: string): string {
+  const parts = name.split(/[-_.\s]+/).filter(Boolean);
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : name.slice(0, 2)).toUpperCase();
+}
+
+function avatars(names: string[]): string {
+  const more = names.length - MAX_AVATARS;
+  return `<span class="avatars">${names
+    .slice(0, MAX_AVATARS)
+    // The initials are decoration; the name is read from the sr-only text, so no aria-label disagrees with what is shown.
+    .map((n) => `<a class="avatar" href="${esc(npmUser(n))}" title="${esc(n)}"><span aria-hidden="true">${esc(initials(n))}</span><span class="sr-only">${esc(n)}</span></a>`)
+    .join('')}${more > 0 ? `<span class="avatar avatar-more" title="${more} more">+${more}</span>` : ''}</span>`;
+}
+
+// ---------- tabs: dependencies, readme ----------
+
+function dependencies(reg: RegistryDoc, name: string): string {
+  const deps = Object.entries(reg.dependencies ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  if (!deps.length) {
+    return `<div class="empty">
+        <p class="hand empty-note">Zero dependencies. Nothing to audit here.</p>
+        <p class="empty-sub">Installing ${esc(name)} pulls in nothing else. A package with dependencies lists each one here, linked to its own real installs.</p>
+      </div>`;
+  }
+  const version = reg['dist-tags'].latest;
+  return `<section>
+      <h2 class="section-title">What ${esc(name)} ${version ? `${esc(version)} ` : ''}installs</h2>
+      <p class="versions-lede">Direct dependencies of the latest version. Each one links to its own page with npm downloads and real installs.</p>
+      <div class="table-wrap"><table class="cmp-table dep-list">
+        <thead><tr><th scope="col">package</th><th scope="col" class="num">version range</th></tr></thead>
+        <tbody>${deps
+          .map(
+            ([d, range]) =>
+              `<tr><th scope="row">${isValidPackageName(d) ? `<a href="${esc(pkgHref(d))}">${esc(d)}</a>` : esc(d)}</th><td class="num" data-label="version range">${esc(range)}</td></tr>`,
+          )
+          .join('')}</tbody>
+      </table></div>
+    </section>`;
+}
+
+// npm stores this placeholder for packages published without a README.
+const NO_README = /^\s*(?:ERROR: No README data found!)?\s*$/;
+const ABSOLUTE = /^(?:[a-z][a-z\d+.-]*:|\/\/)/i;
+
+// GitHub's heading anchors, prefixed like GitHub's so README ids never clash with the page's own.
+const slug = (text: string) => text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+
+async function fillReadme(host: HTMLElement, reg: RegistryDoc): Promise<void> {
+  const repo = parseGithubRepo(reg.repository);
+  const repoUrl = repo ? `https://github.com/${repo}` : safeUrl(typeof reg.repository === 'string' ? reg.repository : reg.repository?.url);
+  const view = repoUrl ? ` <a href="${esc(repoUrl)}">${repo ? 'View on GitHub' : 'View the repository'} <span aria-hidden="true">→</span></a>` : '';
+  host.removeAttribute('aria-busy');
+  if (NO_README.test(reg.readme ?? '')) {
+    host.innerHTML = `<div class="empty">
+        <p class="hand empty-note">No README on npm.</p>
+        <p class="empty-sub">The latest version of ${esc(reg.name)} was published without one.${view}</p>
+      </div>`;
+    return;
+  }
+  try {
+    const [{ marked }, { default: DOMPurify }] = await Promise.all([import('marked'), import('dompurify')]);
+    const html = await marked.parse(reg.readme!, { gfm: true });
+    const frag = DOMPurify.sanitize(html, {
+      RETURN_DOM_FRAGMENT: true,
+      SANITIZE_NAMED_PROPS: true, // ids and names get GitHub's "user-content-" prefix: no clash with the page's own
+      FORBID_ATTR: ['style'],
+      FORBID_TAGS: ['style', 'form'],
+    });
+    // Monorepo packages keep their README next to their code: relative paths start from that folder.
+    const dir = typeof reg.repository === 'object' ? String((reg.repository as { directory?: unknown }).directory ?? '') : '';
+    fixReadme(frag, repo, dir.replace(/[^\w.\-/]/g, '').replace(/^[./]+|\/+$/g, ''));
+    host.replaceChildren(frag);
+    host.insertAdjacentHTML('beforeend', `<p class="readme-foot">README rendered from the npm registry.${view}</p>`);
+  } catch {
+    host.innerHTML = `<p class="empty-sub">The README could not be rendered here.${view}</p>`;
+  }
+}
+
+// Relative links and images point into the GitHub repo (blob pages for links, raw files for images), or go away
+// when the repo is not on GitHub. Headings move down a level: the page already has its h1.
+function fixReadme(root: DocumentFragment, repo: string | null, dir: string): void {
+  const folder = dir ? `${dir}/` : '';
+  const resolve = (url: string, kind: 'blob' | 'raw'): string | null => {
+    if (!repo) return null;
+    const base = kind === 'raw' ? `https://raw.githubusercontent.com/${repo}/HEAD/` : `https://github.com/${repo}/blob/HEAD/`;
+    try {
+      return url.startsWith('/') ? new URL(url.slice(1), base).href : new URL(url, base + folder).href;
+    } catch {
+      return null;
+    }
+  };
+  const ids = new Map<string, number>();
+  for (const h of root.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) {
+    const level = Math.min(6, Number(h.tagName[1]) + 1);
+    const next = document.createElement(`h${level}`);
+    next.append(...h.childNodes);
+    const s = slug(next.textContent ?? '');
+    if (s) {
+      const n = ids.get(s) ?? 0;
+      ids.set(s, n + 1);
+      next.id = `user-content-${s}${n ? `-${n}` : ''}`;
+    }
+    h.replaceWith(next);
+  }
+  for (const a of root.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+    const href = a.getAttribute('href')!;
+    if (href.startsWith('#')) {
+      a.setAttribute('href', `#user-content-${href.slice(1).replace(/^user-content-/, '')}`);
+      continue;
+    }
+    const url = ABSOLUTE.test(href) ? href : resolve(href, 'blob');
+    if (!url || !/^(?:https?|mailto):/i.test(url)) {
+      a.replaceWith(...a.childNodes);
+      continue;
+    }
+    a.setAttribute('href', url);
+    a.setAttribute('rel', 'noopener nofollow');
+  }
+  for (const img of root.querySelectorAll<HTMLImageElement>('img')) {
+    const src = img.getAttribute('src') ?? '';
+    const url = ABSOLUTE.test(src) ? src : resolve(src, 'raw');
+    if (!url || !/^https?:/i.test(url)) {
+      img.remove();
+      continue;
+    }
+    img.setAttribute('src', url);
+    img.removeAttribute('srcset');
+    img.loading = 'lazy';
+    img.decoding = 'async';
+  }
+  // <picture> sources may hold relative paths too; the <img> inside is enough.
+  for (const s of root.querySelectorAll('source')) s.remove();
+  for (const t of root.querySelectorAll('table')) {
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    t.before(wrap);
+    wrap.append(t);
+  }
+}
+
 // ---------- evidence: "Who actually uses it" ----------
 
 const NA = '<span class="na" title="Unavailable: this source did not answer">—<span class="sr-only"> (unavailable)</span></span>';
@@ -302,7 +656,7 @@ function fillEvidence(host: HTMLElement, ev: Evidence): void {
   const stats: [string, string, string][] = [
     ['dependent packages', count(ev.dependentPackages), 'on npm'],
     ['dependent repos', count(ev.dependentRepos), 'open-source repositories'],
-    ['jsDelivr hits', count(ev.cdnHitsMonth), 'last month, from browsers'],
+    ['jsDelivr hits', count(ev.cdnHitsMonth), 'last month, served by the CDN'],
     [
       'GitHub',
       gh ? `<strong class="num">★ ${fmtCompact(gh.stars)}</strong> <span class="ev-sub">· ${fmtCompact(gh.forks)} forks</span>` : NA,
@@ -315,24 +669,25 @@ function fillEvidence(host: HTMLElement, ev: Evidence): void {
   host.removeAttribute('aria-busy');
   host.innerHTML = `
     <h2 class="section-title" id="ev-title">Independent evidence of use</h2>
-    <p class="evidence-lede">Download counts are easy to inflate. These numbers are harder to fake.</p>
+    <p class="evidence-lede">Signals from outside npm's download count. They are harder to fake than downloads, but they only see public code.</p>
     <dl class="ev-grid">
       ${stats.map(([dt, dd, sub]) => `<div class="ev"><dt>${dt}</dt><dd>${dd}</dd><dd class="ev-sub">${sub}</dd></div>`).join('')}
     </dl>
     ${
       top.length
-        ? `<p class="ev-top-title hand">some packages that depend on it</p>
-           <ul class="ev-top">${top
-             .map(
-               (d) =>
-                 `<li><a class="tag" href="${esc(pkgHref(d.name))}">${esc(d.name)}</a>${
-                   d.downloads != null ? `<span class="ev-sub"> ${fmtCompact(d.downloads)} downloads</span>` : ''
-                 }</li>`,
-             )
-             .join('')}</ul>`
+        ? `<h3 class="ev-top-title">Some packages that depend on it</h3>
+           <div class="table-wrap"><table class="cmp-table">
+             <thead><tr><th scope="col">package</th><th scope="col" class="num">npm downloads / week</th></tr></thead>
+             <tbody>${top
+               .map(
+                 (d) =>
+                   `<tr><th scope="row"><a href="${esc(pkgHref(d.name))}">${esc(d.name)}</a></th><td class="num" data-label="npm downloads / week">${d.downloads != null ? fmt(d.downloads) : '—'}</td></tr>`,
+               )
+               .join('')}</tbody>
+           </table></div>`
         : ''
     }
-    ${code ? `<p class="ev-code"><a href="${esc(code)}">Search GitHub for usages <span aria-hidden="true">→</span></a></p>` : ''}`;
+    ${code ? `<p class="method"><a href="${esc(code)}">Search GitHub for usages <span aria-hidden="true">→</span></a></p>` : ''}`;
 }
 
 // ---------- README badge ----------
@@ -351,7 +706,7 @@ async function badge(host: HTMLElement, name: string, est: () => Estimate): Prom
   host.hidden = false;
   if (!BADGE_API && !(Array.isArray(tracked) && tracked.includes(name))) {
     host.innerHTML = `
-      <h2 class="section-title">Want a badge?</h2>
+      <h2 class="sheet-title">Want a badge?</h2>
       <p class="badge-ask">README badges are built for tracked packages. Add <code>${esc(name)}</code> to the list with a
         <a href="${TRACKED_URL}">one-line pull request</a>.</p>`;
     return;
@@ -362,16 +717,15 @@ async function badge(host: HTMLElement, name: string, est: () => Estimate): Prom
   // The preview costs no request: the number this page computed with the same model as the badge (redrawn once
   // evidence settles confidence).
   host.innerHTML = `
-    <h2 class="section-title">Add a badge to your README</h2>
+    <h2 class="sheet-title">Badge for your README</h2>
     <div class="badge-row">
       ${shieldHtml(badgeOf(est()), true)}
-      <button type="button" class="btn btn-quiet">Copy markdown</button>
-      <p class="badge-status" aria-live="polite"></p>
+      <button type="button" class="text-btn">Copy markdown</button>
     </div>
-    <p class="fineprint">The badge updates every day or few days, so it can trail the live numbers above.${
+    <p class="badge-status" aria-live="polite"></p>
+    <details class="badge-more"><summary>Show markdown</summary><p class="fineprint">Updates every day or few days, so it can trail the live numbers.${
       BADGE_API ? ' A brand-new badge may read “calculating…” for a few minutes.' : ''
-    }</p>
-    <details class="badge-more"><summary>Show markdown</summary><code class="badge-md">${esc(md)}</code></details>`;
+    }</p><code class="badge-md">${esc(md)}</code></details>`;
   const code = host.querySelector<HTMLElement>('.badge-md')!;
   const status = host.querySelector<HTMLElement>('.badge-status')!;
   host.querySelector('button')!.addEventListener('click', async () => {
@@ -390,58 +744,78 @@ async function badge(host: HTMLElement, name: string, est: () => Estimate): Prom
   });
 }
 
-// ---------- breakdown and versions ----------
+// ---------- strip panels: versions in use, where the downloads went ----------
+
+const VERSION_COLORS = ['--blue', '--blue-soft', '--hl'];
+const pct = (x: number) => `${Math.round(x * 100)}%`;
+
+// Which versions the real installs land on: the top three by downloads above the crawler floor, plus the rest.
+function versionShare(est: Estimate): string {
+  const rows = est.versions.filter((r) => r.aboveFloor > 0).sort((a, b) => b.aboveFloor - a.aboveFloor);
+  const total = rows.reduce((s, r) => s + r.aboveFloor, 0);
+  const head = `<h2 class="panel-title" id="vs-h">Which versions get installed</h2><p class="panel-sub">share of real installs, last 7 days</p>`;
+  if (!total) return `<section class="panel-sec" aria-labelledby="vs-h">${head}<p class="panel-sub">No version rises above the crawler floor yet.</p></section>`;
+  const top = rows.slice(0, 3);
+  const rest = total - top.reduce((s, r) => s + r.aboveFloor, 0);
+  const parts = [
+    ...top.map((r, i) => ({ label: r.version, share: r.aboveFloor / total, color: VERSION_COLORS[i] })),
+    ...(rest > 0 ? [{ label: rows.length - 3 === 1 ? '1 other version' : `${rows.length - 3} other versions`, share: rest / total, color: '--pencil' }] : []),
+  ];
+  return `<section class="panel-sec" aria-labelledby="vs-h">${head}
+      <div class="share-bar" aria-hidden="true">${parts.map((p) => `<span style="flex-grow:${p.share.toFixed(4)};background:var(${p.color})"></span>`).join('')}</div>
+      <ul class="share-legend">${parts
+        .map((p) => `<li><span class="swatch" style="background:var(${p.color})" aria-hidden="true"></span><span class="num">${esc(p.label)}</span><span class="num share-v">${pct(p.share)}</span></li>`)
+        .join('')}</ul>
+      <p class="panel-note hand">${pct(parts[0].share)} of real installs are on ${esc(parts[0].label)}</p>
+    </section>`;
+}
 
 function breakdown(est: Estimate): string {
   // Year totals that add up exactly to npm's count: spikes removed, then floor, then what remains.
   const mirrors = est.daily.reduce((s, d) => s + Math.max(0, d.npm - d.cleaned), 0);
-  const humans = est.daily.reduce((s, d) => s + Math.min(d.organic, d.cleaned), 0);
+  const kept = est.daily.reduce((s, d) => s + Math.min(d.organic, d.cleaned), 0);
   const crawlers = est.daily.reduce((s, d) => s + Math.max(0, d.cleaned - d.organic), 0);
-  const total = mirrors + crawlers + humans || 1;
-  const b = est.breakdown;
+  const total = mirrors + crawlers + kept || 1;
+  const f = est.breakdown.crawlerFloorPerVersion;
   const parts = [
-    { key: 'mirrors', label: 'mirrors & scanners', value: mirrors, extra: 'spikes right after each publish' },
-    { key: 'crawlers', label: 'crawlers', value: crawlers, extra: `about ${fmt(b.crawlersWeekly)} / week` },
-    { key: 'humans', label: 'CI, dependency installs and people', value: humans, extra: `about ${fmt(b.organicWeekly)} / week` },
+    { key: 'mirrors', label: 'Mirrors & scanners', value: mirrors },
+    { key: 'crawlers', label: 'Crawlers', value: crawlers },
+    { key: 'kept', label: 'CI, deps & people', value: kept },
   ];
   return `
-    <section class="breakdown">
-      <h2 class="section-title">Where the downloads went</h2>
-      <p class="breakdown-lede">All ${fmt(Math.round(total))} npm downloads of the last 12 months, sorted by what most likely made them. Crawlers and real installs use this week's split for the whole year, so treat them as a rough guide.</p>
+    <section class="panel-sec breakdown" aria-labelledby="bd-h">
+      <h2 class="panel-title" id="bd-h">Where last year's downloads went</h2>
+      <p class="panel-sub"><span class="num">${fmtCompact(Math.round(total))}</span> fetches in 12 months</p>
       <div class="bar" aria-hidden="true">
         ${parts
           .filter((p) => p.value > 0)
           .map((p) => `<span class="seg seg-${p.key}" style="flex-grow:${(p.value / total).toFixed(5)}"></span>`)
           .join('')}
       </div>
-      <dl class="bar-legend">
-        ${parts
-          .map(
-            (p) => `<div><dt><span class="key seg-${p.key}" aria-hidden="true"></span>${p.label}</dt>
-              <dd><strong>${fmt(p.value)}</strong> · ${Math.round((p.value / total) * 100)}% · ${esc(p.extra)}</dd></div>`,
-          )
-          .join('')}
+      <dl class="kv">
+        ${parts.map((p) => `<div class="kv-${p.key}"><dt>${p.label}</dt><dd class="num">${fmtCompact(p.value)} · ${Math.round((p.value / total) * 100)}%</dd></div>`).join('')}
       </dl>
+      <p class="panel-foot">${f === null ? 'Too few versions to measure the crawler floor, so a global estimate is used.' : `Crawler floor: ${fmt(f)} fetches per version per week × ${fmt(est.versions.length)} versions.`} Crawlers and real installs use this week's split for the whole year.</p>
     </section>`;
 }
 
 function versions(est: Estimate, name: string): string {
   const rows = est.versions;
-  if (!rows.length) return '';
+  if (!rows.length) return '<p>npm reports no downloads for any version in the last 7 days.</p>';
   const f = est.breakdown.crawlerFloorPerVersion;
   const max = Math.max(1, ...rows.map((r) => r.downloads));
   const floorPct = f === null ? null : Math.min(100, (f / max) * 100);
   const floorText =
     f === null
       ? `Too few versions to measure the crawler floor for ${esc(name)}, so a global estimate is used.`
-      : `Crawler floor: <strong class="num">${fmt(f)}</strong> fetches per version per week. Robots download every version about this often, used or not. Only what sits above the dashed line is left after filtering.`;
+      : `Crawler floor: <strong class="num">${fmt(f)}</strong> fetches per version per week, measured on old versions. Crawlers download every version about this often, used or not. The dashed line marks it, and only what sits above it counts toward real installs.`;
   return `
     <section class="versions">
       <h2 class="section-title">By version, last 7 days</h2>
       <p class="versions-lede">${floorText}</p>
       <div class="table-wrap">
         <table style="${floorPct === null ? '' : `--floor:${floorPct.toFixed(2)}%`}">
-          <thead><tr><th scope="col">version</th><th scope="col" class="num">downloads</th><th scope="col" class="num">above floor</th><th scope="col" class="bar-col"><span class="sr-only">chart</span></th></tr></thead>
+          <thead><tr><th scope="col">version</th><th scope="col" class="num">npm / week</th><th scope="col" class="num">above floor</th><th scope="col" class="bar-col"><span class="sr-only">chart</span></th></tr></thead>
           <tbody>
             ${rows
               .map(

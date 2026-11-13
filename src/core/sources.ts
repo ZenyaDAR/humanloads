@@ -110,15 +110,62 @@ export function maintenanceNote(name: string, readme: unknown): string | undefin
   return undefined;
 }
 
+const README_MAX = 150_000; // chars; the doc is cached in sessionStorage
+
+// Any "types" condition anywhere in an exports map.
+const exportsHaveTypes = (x: unknown): boolean =>
+  !!x && typeof x === 'object' && Object.entries(x).some(([k, v]) => k === 'types' || exportsHaveTypes(v));
+
+function hasTypes(name: string, manifest: any): boolean {
+  return name.startsWith('@types/') || typeof manifest.types === 'string' || typeof manifest.typings === 'string' || exportsHaveTypes(manifest.exports);
+}
+
+// All string targets and condition names in an exports map.
+function exportsEntries(x: unknown, out: [string, string][] = [], key = ''): [string, string][] {
+  if (typeof x === 'string') out.push([key, x]);
+  else if (x && typeof x === 'object') for (const [k, v] of Object.entries(x)) exportsEntries(v, out, k);
+  return out;
+}
+
+// Conservative: only what the manifest states plainly. Empty when unsure.
+function moduleFormats(m: any): ('esm' | 'cjs')[] {
+  const main = typeof m.main === 'string' ? m.main : '';
+  const exp = exportsEntries(m.exports);
+  const esm =
+    m.type === 'module' || typeof m.module === 'string' || main.endsWith('.mjs') ||
+    exp.some(([k, v]) => k === 'import' || k === 'module' || v.endsWith('.mjs'));
+  const cjs =
+    main.endsWith('.cjs') || exp.some(([k, v]) => k === 'require' || v.endsWith('.cjs')) ||
+    (m.type !== 'module' && main !== '' && !main.endsWith('.mjs'));
+  return [...(esm ? ['esm' as const] : []), ...(cjs ? ['cjs' as const] : [])];
+}
+
 // ponytail: we still download the full registry doc (several MB for react) because only it carries
 // `time`; the abbreviated install doc doesn't. Trimming here only keeps memory/fixtures small.
 export function trimRegistry(doc: any): RegistryDoc {
-  const deprecated = doc.versions?.[doc['dist-tags']?.latest]?.deprecated;
+  const latest = doc.versions?.[doc['dist-tags']?.latest];
+  const deprecated = latest?.deprecated;
   const note = maintenanceNote(String(doc.name ?? ''), doc.readme);
+  const deps = latest?.dependencies && typeof latest.dependencies === 'object'
+    ? Object.fromEntries(Object.entries(latest.dependencies).filter((e): e is [string, string] => typeof e[1] === 'string'))
+    : undefined;
+  const maintainers = Array.isArray(doc.maintainers)
+    ? doc.maintainers.map((m: any) => m?.name).filter((n: unknown): n is string => typeof n === 'string' && n !== '')
+    : [];
+  const publisher = latest?._npmUser?.name;
+  const formats = latest ? moduleFormats(latest) : [];
   return {
     ...(Array.isArray(doc.maintainers) && { maintainerCount: doc.maintainers.length }),
     ...(typeof deprecated === 'string' && deprecated && { deprecated }),
     ...(note && { maintenanceNote: note }),
+    ...(typeof doc.readme === 'string' && doc.readme.trim() && { readme: doc.readme.slice(0, README_MAX) }),
+    ...(deps && { dependencies: deps }),
+    ...(typeof latest?.dist?.unpackedSize === 'number' && { unpackedSize: latest.dist.unpackedSize }),
+    ...(typeof latest?.dist?.fileCount === 'number' && { fileCount: latest.dist.fileCount }),
+    ...(latest && hasTypes(String(doc.name ?? ''), latest) && { types: true }),
+    ...(formats.length && { moduleFormats: formats }),
+    ...(typeof publisher === 'string' && publisher && { publisher }),
+    ...(maintainers.length && { maintainers }), // names only: the registry list also carries emails
     name: doc.name,
     description: doc.description,
     license: typeof doc.license === 'string' ? doc.license : doc.license?.type,

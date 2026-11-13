@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { estimate } from '../src/core/estimate.ts';
 import { factsHtml, monthlyHtml, packageFacts, type PackageFacts } from '../src/core/insights.ts';
-import { isIndexable, packageTitle } from '../src/core/seo.ts';
+import { compareTitle, isIndexable, packageTitle } from '../src/core/seo.ts';
 import { prerenderHtml } from '../scripts/data-lib.ts';
 import type { FeaturedRow, RawPackageData } from '../src/core/types.ts';
 
@@ -61,6 +61,9 @@ test('facts text: a flat week does not claim bots, it would contradict the estim
 test('titles stay within 70 characters for long scoped names', () => {
   assert.equal(packageTitle('zod'), 'zod npm downloads: weekly stats and real installs · humanloads');
   assert.ok(packageTitle('@abhash-chakraborty/inyon-linux-arm64').length <= 70);
+  assert.equal(packageTitle(`@scope/${'x'.repeat(50)}`), `@scope/${'x'.repeat(50)} npm downloads`); // the second fallback
+  assert.equal(compareTitle(['react', 'vue']), 'react vs vue: npm downloads and real installs compared · humanloads');
+  assert.equal(compareTitle(['@mui/material', '@chakra-ui/react']), '@mui/material vs @chakra-ui/react: npm downloads compared');
 });
 
 test('facts: growth compares whole windows and is null for a package too young to compare', () => {

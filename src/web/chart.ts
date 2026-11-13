@@ -1,4 +1,3 @@
-import rough from 'roughjs';
 import type { Estimate } from '../core/types.ts';
 import { fmt, fmtShort } from './util.ts';
 
@@ -42,28 +41,41 @@ function ticks(max: number): number[] {
     return Math.round(v / p) * p;
   };
   const out = [0.0625, 0.25, 0.5625, 1].map((f) => (max * f >= 1 ? nice(max * f) : 0)).filter((v) => v > 0 && v <= max);
-  return [0, ...new Set(out)];
+  return [...new Set(out)];
+}
+
+// Seeded, so the hand wobble is the same on every redraw.
+function rng(seed: number): () => number {
+  let s = seed;
+  return () => ((s = (s * 16807) % 2147483647) - 1) / 2147483646;
+}
+
+function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>): SVGElementTagNameMap[K] {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
+  return e;
 }
 
 function text(x: number, y: number, value: string, cls: string, anchor = 'middle'): SVGTextElement {
-  const t = document.createElementNS(NS, 'text');
-  t.setAttribute('x', String(x));
-  t.setAttribute('y', String(y));
-  t.setAttribute('text-anchor', anchor);
-  t.setAttribute('class', cls);
+  const t = el('text', { x, y, 'text-anchor': anchor, class: cls });
   t.textContent = value; // version strings are third-party: textContent only
   return t;
 }
 
+// A line through the points with a small seeded wobble: drawn by hand, but steady.
+const wobbly = (pts: [number, number][], r: () => number, j: number) =>
+  pts.map(([x, y], i) => `${i ? 'L' : 'M'}${(x + (r() - 0.5) * j).toFixed(1)} ${(y + (r() - 0.5) * j).toFixed(1)}`).join(' ');
+
 function versionLabel(w: Week): string {
-  const v = w.versions[w.versions.length - 1];
-  const name = /^\d/.test(v) ? `v${v}` : v;
-  const more = w.versions.length > 1 ? ` +${w.versions.length - 1}` : '';
-  return `${name}${more}${w.mirrors > 0 ? ' → mirrors' : ''}`;
+  // A stable release names the week better than a canary published next to it; long names are clipped.
+  const v = w.versions.filter((x) => !x.includes('-')).at(-1) ?? w.versions[w.versions.length - 1];
+  const full = /^\d/.test(v) ? `v${v}` : v;
+  const name = full.length > 16 ? `${full.slice(0, 15)}…` : full;
+  return w.versions.length > 1 ? `${name} +${w.versions.length - 1}` : name;
 }
 
-// One line per package. A single series gets the full treatment (range band, publish notes);
-// several series (compare page) get one marker line each plus a faint dashed npm line.
+// One line per package. A single series gets the full treatment (range band, release notes);
+// several series (compare page) get one solid line each plus a faint dashed npm line.
 export interface Series {
   est: Estimate;
   label: string; // package name, for the text alternative
@@ -76,137 +88,132 @@ function draw(all: Week[][], colors: string[], width: number, animate: boolean):
   const single = all.length === 1;
   const weeks = all[0];
   const narrow = width < 480;
-  const H = Math.round(Math.min(340, Math.max(230, width * 0.48)));
-  const m = { t: single ? 44 : 16, r: 12, b: 30, l: narrow ? 36 : 48 };
+  const H = Math.round(Math.min(320, Math.max(220, width * 0.42)));
+  const m = { t: single ? 46 : 18, r: 10, b: 28, l: narrow ? 38 : 48 };
   const iw = width - m.l - m.r;
   const ih = H - m.t - m.b;
   const max = Math.max(1, ...all.flat().map((w) => Math.max(w.npm, w.high)));
   // ponytail: sqrt scale so a 2/week filtered line stays visible next to 500-fetch mirror spikes; ticks keep it honest.
   const y = (v: number) => m.t + ih - Math.sqrt(Math.max(0, v) / max) * ih;
-  const x = (i: number) => m.l + (i / (weeks.length - 1)) * iw;
+  const x = (i: number) => m.l + (i / Math.max(1, weeks.length - 1)) * iw;
+  const r = rng(11);
 
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', `0 0 ${width} ${H}`);
-  svg.setAttribute('width', String(width));
-  svg.setAttribute('height', String(H));
-  svg.setAttribute('aria-hidden', 'true'); // the figure carries the text alternative
-  const rc = rough.svg(svg);
-  const base = { seed: 11, roughness: 1, bowing: 0.7 };
+  const svg = el('svg', { viewBox: `0 0 ${width} ${H}`, width, height: H, 'aria-hidden': 'true' }); // the host carries the text alternative
 
   for (const t of ticks(max)) {
     const ty = y(t);
-    const guide = rc.line(m.l, ty, m.l + iw, ty, { ...base, stroke: color('--pencil'), strokeWidth: 0.6, roughness: 0.5, disableMultiStroke: true });
-    guide.setAttribute('opacity', t === 0 ? '0' : '0.45');
-    svg.append(guide, text(m.l - 7, ty + 4, fmtShort(t), 'c-tick', 'end'));
+    svg.append(el('line', { x1: m.l, y1: ty, x2: m.l + iw, y2: ty, class: 'c-grid' }), text(m.l - 8, ty + 4, fmtShort(t), 'c-tick', 'end'));
   }
-  svg.append(rc.line(m.l, m.t + ih, m.l + iw, m.t + ih, { ...base, stroke: color('--ink'), strokeWidth: 1.2 }));
-  svg.append(rc.line(m.l, m.t - 6, m.l, m.t + ih, { ...base, stroke: color('--ink'), strokeWidth: 1.2 }));
+  svg.append(el('path', { d: `M${m.l} ${m.t - 8} L${m.l} ${m.t + ih} L${m.l + iw} ${m.t + ih}`, class: 'c-axis' }));
 
   // Month labels under the axis, thinned out on narrow screens.
-  const every = narrow ? 3 : width < 760 ? 2 : 1;
+  // A label is about 30px wide: thin out only when months would run into each other.
+  const perMonth = (iw / Math.max(1, weeks.length - 1)) * 4.35;
+  const every = narrow ? 3 : Math.max(1, Math.ceil(34 / perMonth));
   let lastMonth = -1;
   let seen = 0;
   weeks.forEach((w, i) => {
     const month = new Date(`${w.start}T00:00:00Z`).getUTCMonth();
     if (month === lastMonth) return;
     lastMonth = month;
-    if (seen++ % every === 0 && x(i) > m.l + 10 && x(i) < width - 16) svg.append(text(x(i), H - 9, MONTHS[month], 'c-tick'));
+    if (seen++ % every === 0 && x(i) > m.l + 10 && x(i) < width - 16) svg.append(text(x(i), H - 8, MONTHS[month], 'c-tick'));
   });
 
   for (const [k, ws] of all.entries()) {
     const ink = color(colors[k]);
-    const line = (v: (w: Week) => number) => ws.map((w, i): [number, number] => [x(i), y(v(w))]);
+    const pts = (v: (w: Week) => number) => ws.map((w, i): [number, number] => [x(i), y(v(w))]);
     if (single) {
-      const band = rc.polygon([...line((w) => w.high), ...line((w) => w.low).reverse()], {
-        ...base, stroke: 'none', fill: ink, fillStyle: 'hachure', hachureAngle: -41, hachureGap: narrow ? 4 : 5, fillWeight: 0.9,
-      });
-      band.setAttribute('opacity', '0.4');
-      svg.append(band);
+      const band = [...pts((w) => w.high), ...pts((w) => w.low).reverse()];
+      svg.append(el('path', { d: `${band.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)} ${py.toFixed(1)}`).join(' ')} Z`, fill: color('--blue-soft'), stroke: 'none' }));
     }
-    const npm = rc.linearPath(line((w) => w.npm), {
-      ...base, stroke: single ? color('--pencil') : ink, strokeWidth: single ? 1.7 : 1.3, strokeLineDash: [7, 5], roughness: 1.4, disableMultiStroke: true,
-    });
+    const npm = el('path', { d: wobbly(pts((w) => w.npm), r, 3), class: 'c-npm', stroke: single ? color('--pencil') : ink });
     if (!single) npm.setAttribute('opacity', '0.5');
-    const organic = rc.linearPath(line((w) => w.organic), {
-      ...base, seed: base.seed + k, stroke: ink, strokeWidth: narrow ? 2.6 : 3.2, roughness: 0.9,
-    });
+    const real = el('path', { d: wobbly(pts((w) => w.organic), r, 3), class: 'c-real', stroke: ink, 'stroke-width': single ? (narrow ? 2.6 : 3.2) : 2.6 });
+    const echo = el('path', { d: wobbly(pts((w) => w.organic), r, 5), class: 'c-echo', stroke: ink });
     if (animate) {
-      organic.setAttribute('class', 'c-draw');
-      organic.querySelectorAll('path').forEach((p) => p.setAttribute('pathLength', '1'));
+      for (const p of [real, echo]) {
+        p.setAttribute('pathLength', '1');
+        p.classList.add('c-draw');
+      }
     }
-    svg.append(npm, organic);
+    svg.append(npm, echo, real);
   }
   if (!single) return svg;
 
-  // Margin notes: the biggest publish weeks, labelled in note blue with a sketched arrow.
+  // Release notes: the biggest publish weeks, labelled in red pen above the spike, with a short tick.
+  // Weeks with a stable release first: a stream of canaries would otherwise take every label.
+  const stable = (w: Week) => w.versions.some((v) => !v.includes('-'));
+  const anyStable = weeks.some(stable);
   const picks = weeks
     .map((w, i) => ({ w, i }))
-    .filter(({ w }) => w.versions.length > 0)
+    .filter(({ w }) => (anyStable ? stable(w) : w.versions.length > 0))
     .sort((a, b) => b.w.mirrors - a.w.mirrors || b.w.npm - a.w.npm)
     .slice(0, narrow ? 3 : 5)
     .sort((a, b) => a.i - b.i);
   const placed: { left: number; right: number; level: number }[] = [];
   for (const { w, i } of picks) {
     const label = versionLabel(w);
-    const half = label.length * 3.6 + 4; // Caveat at 16px is roughly 7px per character
-    const lx = Math.min(Math.max(x(i), half + 2), width - half - 2);
+    const half = label.length * 3.5 + 4; // Caveat at 17px is roughly 7px per character
+    const lx = Math.min(Math.max(x(i), m.l + half), width - half - 2);
     // Two rows of labels; drop the note when both rows are taken at this x.
     const level = [0, 1].find((lv) => !placed.some((p) => p.level === lv && lx - half < p.right && lx + half > p.left));
     if (level === undefined) continue;
     placed.push({ left: lx - half, right: lx + half, level });
-    const ly = 16 + level * 17;
-    const px = x(i);
-    const py = y(w.npm) - 5;
-    const ink = { ...base, stroke: color('--note'), strokeWidth: 1.1, roughness: 0.8, disableMultiStroke: true };
-    if (py - ly > 14) {
-      svg.append(rc.line(lx, ly + 5, px, py, ink));
-      const ang = Math.atan2(py - ly - 5, px - lx);
-      for (const d of [0.5, -0.5]) svg.append(rc.line(px, py, px - 7 * Math.cos(ang + d), py - 7 * Math.sin(ang + d), ink));
-    }
+    const ly = 16 + level * 18;
+    // A short pen tick under the note, pointing at the spike's week.
+    const py = Math.min(y(w.npm) - 4, ly + 17);
+    if (py - ly > 8) svg.append(el('path', { d: `M${x(i)} ${ly + 5} L${x(i)} ${py}`, class: 'c-tickmark' }));
     svg.append(text(lx, ly, label, 'c-note'));
   }
   return svg;
 }
 
-// Renders into `host` and redraws whenever its width or the color theme changes.
-export function mountChart(host: HTMLElement, series: Series[]): void {
+// Renders into `host` and redraws whenever its width or the color theme changes. Returns a setter for the
+// number of weeks shown (the 3 mo / 6 mo / 1 yr buttons).
+export function mountChart(host: HTMLElement, series: Series[]): (weeks: number) => void {
   // Align on the newest week: every package's year ends on the same day, but young ones are shorter.
   const full = series.map((s) => toWeeks(s.est));
   const n = Math.min(...full.map((w) => w.length));
-  const all = full.map((w) => w.slice(w.length - n));
+  const aligned = full.map((w) => w.slice(w.length - n));
   if (n < 2) {
-    host.innerHTML = '<p class="chart-empty hand">Not enough history to draw a chart yet.</p>';
-    return;
+    host.innerHTML = '<p class="chart-empty hand">Less than two weeks of downloads so far, too little to chart.</p>';
+    return () => {};
   }
   host.setAttribute('role', 'img');
-  if (all.length === 1) {
-    const weeks = all[0];
+  if (aligned.length === 1) {
+    const weeks = aligned[0];
     const sum = (k: 'npm' | 'organic' | 'low' | 'high') => weeks.reduce((s, w) => s + w[k], 0);
     host.setAttribute(
       'aria-label',
       `Chart of weekly downloads over the last ${weeks.length} weeks. npm counted ${fmt(sum('npm'))} downloads; ` +
-        `real installs ${fmt(sum('organic'))} (range ${fmt(sum('low'))} to ${fmt(sum('high'))}). ` +
+        `real installs about ${fmt(sum('organic'))} (likely range ${fmt(sum('low'))} to ${fmt(sum('high'))}). ` +
         `Peak npm week: ${fmt(Math.max(...weeks.map((w) => w.npm)))}.`,
     );
   } else {
     const parts = series.map((s, k) => {
-      const ws = all[k];
+      const ws = aligned[k];
       return `${s.label}: npm ${fmt(ws.reduce((t, w) => t + w.npm, 0))}, real installs about ${fmt(ws.reduce((t, w) => t + w.organic, 0))}`;
     });
     host.setAttribute('aria-label', `Weekly downloads over the last ${n} weeks. ${parts.join('; ')}. The table below has the numbers.`);
   }
   const colors = series.map((s) => s.color);
 
+  let shown = n;
   let lastWidth = 0;
   let drawn = false;
   const redraw = (force: boolean) => {
     const width = Math.floor(host.clientWidth);
     if (!width || (width === lastWidth && !force)) return;
     lastWidth = width;
+    const all = aligned.map((w) => w.slice(-Math.max(2, shown)));
     host.replaceChildren(draw(all, colors, width, !drawn));
     drawn = true;
   };
   new ResizeObserver(() => redraw(false)).observe(host);
   const onTheme = () => (host.isConnected ? redraw(true) : removeEventListener('hl:theme', onTheme));
   addEventListener('hl:theme', onTheme);
+  return (weeks: number) => {
+    shown = Math.min(n, weeks);
+    redraw(true);
+  };
 }

@@ -93,6 +93,17 @@ test('featured: noisiest leaves out fresh releases, young, deprecated, too-new a
   assert.deepEqual(noisiest.map((r) => r.name), ['keeper']);
 });
 
+test('featured: with no quiet package, settled ones with a recent release fill the list, flagged', () => {
+  const noisy = (name: string) => row(name, 1000, 100);
+  const f = selectFeatured([
+    settled(noisy('released-recently'), { lastRelease: { version: '2.0.0', day: '2026-10-25' } }),
+    settled(noisy('young'), { firstPublished: '2026-10-10' }),
+  ]);
+  assert.deepEqual(f.noisiest.map((r) => r.name), ['released-recently']);
+  assert.equal(f.noisyRecent, true);
+  assert.equal(selectFeatured([settled(noisy('keeper'))]).noisyRecent, false);
+});
+
 test('featured: one package per scope, never padded', () => {
   const rows = [settled(row('@a/x', 1000, 10)), settled(row('@a/y', 1000, 20)), settled(row('@b/z', 1000, 30)), settled(row('plain', 1000, 40))];
   assert.deepEqual(selectFeatured(rows).noisiest.map((r) => r.name), ['@a/x', '@b/z', 'plain']);
@@ -101,7 +112,79 @@ test('featured: one package per scope, never padded', () => {
 
 test('featured: examples are the biggest by npm count', () => {
   const rows = Array.from({ length: 6 }, (_, i) => row(`p${i}`, i * 100, 1));
-  assert.deepEqual(selectFeatured(rows).examples, ['p5', 'p4', 'p3', 'p2']);
+  assert.deepEqual(selectFeatured(rows).examples, ['p5', 'p4', 'p3', 'p2', 'p1']);
+});
+
+// Monthly data: `perDay` real installs a day for each month (low = high), 30 days each, starting at `from` (YYYY-MM).
+const monthsFrom = (from: string, n: number) =>
+  Array.from({ length: n }, (_, i) => {
+    const d = new Date(`${from}-01T00:00:00Z`);
+    d.setUTCMonth(d.getUTCMonth() + i);
+    return d.toISOString().slice(0, 7);
+  });
+const withMonthly = (r: FeaturedRow, perDay: number[], from = '2026-01', over: Partial<PackageFacts> = {}): FeaturedRow => {
+  const total = perDay.map((v) => v * 30);
+  return settled(r, { monthly: { months: monthsFrom(from, perDay.length), npm: total, cleaned: total, low: total, high: total, days: perDay.map(() => 30) }, ...over });
+};
+
+test('featured: rising keeps growing, used, settled packages from the curated lists, one per scope, with category and sparkline', () => {
+  const up = (name: string, growth3m: number, organic = 20_000) => withMonthly(row(name, organic * 2, organic), [10, 20, 30], '2026-01', { growth3m });
+  const { rising } = selectFeatured([
+    up('vitest', 0.18),
+    up('swr', 0.5),
+    up('@tanstack/react-query', 0.3),
+    up('@tanstack/react-form', 0.4),
+    up('not-in-a-list', 2),
+    up('jest', 0.9, 9_999), // too small
+    up('mocha', -0.1), // shrinking
+    up('zod', 0.7), // growth unknown, below
+    { ...up('vite', 0.8), tooNew: true },
+    settled(row('webpack', 40_000, 20_000), { growth3m: 0.6 }), // no monthly series
+    withMonthly(row('moment', 40_000, 20_000), [1, 2], '2026-01', { growth3m: 0.6, deprecated: 'gone' }),
+  ].map((r) => (r.name === 'zod' ? { ...r, facts: { ...r.facts!, growth3m: null } } : r)));
+  assert.deepEqual(rising.map((r) => r.name), ['swr', '@tanstack/react-form', 'vitest']);
+  const vitest = rising.find((r) => r.name === 'vitest')!;
+  assert.equal(vitest.category, 'Test frameworks');
+  assert.deepEqual(vitest.spark, [10, 20, 30]);
+  assert.ok(rising.every((r) => r.category));
+});
+
+test('featured: showcase is the first pair with monthly data, aligned on shared months', () => {
+  const rows = [
+    withMonthly(row('a', 100, 50), [1, 2, 3, 4, 5, 6, 7, 8], '2026-01'),
+    withMonthly(row('b', 100, 50), [9, 8, 7, 6, 5, 4, 3], '2026-02'),
+    settled(row('c', 100, 50)),
+    withMonthly(row('d', 100, 50), [1, 2], '2026-07'),
+  ];
+  const { showcase } = selectFeatured(rows, [['a', 'c'], ['a', 'd'], ['a', 'b']]);
+  assert.deepEqual(showcase?.names, ['a', 'b']);
+  assert.deepEqual(showcase?.months, monthsFrom('2026-02', 7));
+  assert.deepEqual(showcase?.real, [[2, 3, 4, 5, 6, 7, 8], [9, 8, 7, 6, 5, 4, 3]]);
+  assert.equal(selectFeatured(rows, [['a', 'd']]).showcase, null);
+  assert.equal(selectFeatured(rows).showcase, null);
+});
+
+test('home: renders the rising card, the showcase chart and the pinned mini chart', () => {
+  const pinned = withMonthly(row('zod', 1000, 500), [10, 12, 14]);
+  const showcase = { names: ['vitest', 'jest'], months: monthsFrom('2026-01', 6), real: [[1, 2, 3, 4, 5, 6], [5, 5, 5, 5, 5, 5]] };
+  const html = homeHtml(SHELL, 'https://example.test/', {
+    noisiest: [pinned],
+    rising: [{ name: '<x>', growth3m: 0.18, category: 'Test frameworks', spark: [1, 2, 3] }],
+    showcase,
+  }, [['react', 'vue']]);
+  assert.match(html, /Growing fastest/);
+  assert.match(html, /<a class="fcard fcard-rise" href="\/&lt;x&gt;">/);
+  assert.match(html, /\+18%/);
+  assert.match(html, /<svg class="spark"/);
+  assert.match(html, /<a class="showcase" href="\/compare\/vitest,jest">/);
+  assert.match(html, /vitest overtakes jest ↗/);
+  assert.match(html, /class="pin-chart"/);
+  assert.equal(html.match(/<h1/g)?.length, 1);
+  // No crossing, no annotation; no showcase, no card; no monthly data, no mini chart.
+  const flat = homeHtml(SHELL, 'https://example.test/', { showcase: { ...showcase, real: [[6, 6, 6, 6, 6, 7], [5, 5, 5, 5, 5, 5]] } }, [['react', 'vue']]);
+  assert.doesNotMatch(flat, /overtakes/);
+  const bare = homeHtml(SHELL, 'https://example.test/', { noisiest: [row('zod', 1000, 500)] }, [['react', 'vue']]);
+  assert.doesNotMatch(bare, /class="showcase"|class="pin-chart"|Growing fastest/);
 });
 
 // --- Rolling catalog ---
@@ -224,7 +307,7 @@ test('guides and the home FAQ: within search limits, in the sitemap route, with 
     assert.match(html, new RegExp(`rel="canonical" href="https://example.test/${g.path}"`));
     assert.deepEqual(ldOf(html)[0]['@graph'].map((n: { '@type': string }) => n['@type']), ['WebSite', 'TechArticle', 'BreadcrumbList']);
   }
-  const home = homeHtml(SHELL, 'https://example.test/', { popular: ['zod'] });
+  const home = homeHtml(SHELL, 'https://example.test/', { examples: ['zod'] });
   assert.match(home, /href="\/zod"/);
   assert.match(home, /How many people use my npm package\?/);
   assert.ok(ldOf(home)[0]['@graph'].some((n: { '@type': string }) => n['@type'] === 'FAQPage'));
@@ -374,12 +457,12 @@ test('prerender: per-package tags replace the shell ones and og:image stays', ()
   assert.doesNotMatch(html, /content="generic"/);
   assert.match(html, /og:image" content="og.svg"/);
   assert.match(html, /<meta property="og:url" content="https:\/\/example.test\/pkg" \/>/);
-  assert.match(html, /pkg npm downloads: 1,234 a week on npm, about 400 real installs after removing mirrors and crawlers \(high confidence\)/);
+  assert.match(html, /pkg npm downloads: 1\.23K a week on npm, about 400 real installs after removing mirrors and crawlers \(high confidence\)/);
 });
 
-test('prerender: big numbers are compact in the description', () => {
+test('prerender: big numbers are compact, rounded the same way on both sides', () => {
   const html = prerenderHtml(SHELL, 'pkg', { ...row('pkg', 446_662_406, 446_650_334), low: 446_608_065, high: 446_662_406 }, 'https://example.test/');
-  assert.match(html, /446\.7M a week on npm, about 447M real installs/);
+  assert.match(html, /: 447M a week on npm, about 447M real installs/);
 });
 
 test('prerender: without summary numbers the description is generic', () => {
@@ -496,7 +579,7 @@ test('compareHtml: canonical, numbers side by side, answer by real installs, JSO
   });
   assert.match(html, /<link rel="canonical" href="https:\/\/example.test\/sub\/compare\/a,b" \/>/);
   assert.match(html, /<title>a vs b: npm downloads and real installs compared/);
-  assert.match(html, /a vs b npm downloads: 5,000 vs 9,000 a week on npm, about 4K vs 1K real installs after removing/);
+  assert.match(html, /a vs b npm downloads: 5K vs 9K a week on npm, about 4K vs 1K real installs after removing/);
   assert.match(html, /By real installs, /);
   assert.match(html, /<strong>a<\/strong> is ahead of b by about 4\.0×/);
   assert.match(html, /href="\/sub\/compare\/c,d"/);

@@ -2,6 +2,7 @@
 // and every third-party string goes through esc() first.
 import { METHODOLOGY_PATH } from '../core/methodology.ts';
 import { REPO_LINK_HTML } from '../core/seo.ts';
+import { themeIcon } from '../core/layout.ts';
 
 export const BASE = import.meta.env.BASE_URL; // path part of SITE_URL, e.g. '/'
 
@@ -147,7 +148,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (theme === 'system') dispatchEvent(new Event('hl:theme'));
 });
 
-const THEME_ICON: Record<Theme, string> = { system: '◐', light: '☀', dark: '☾' };
+const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 
 // Right side of every header: the GitHub link and the theme toggle.
 export function headTools(): HTMLElement {
@@ -163,7 +164,7 @@ export function themeToggle(): HTMLButtonElement {
   btn.type = 'button';
   btn.className = 'theme-toggle';
   const label = () => {
-    btn.innerHTML = `<span aria-hidden="true">${THEME_ICON[theme]}</span> ${theme}`;
+    btn.innerHTML = `${themeIcon()}${THEME_LABEL[theme]}`;
     btn.setAttribute('aria-label', `Color theme: ${theme}. Change theme`);
   };
   label();

@@ -6,38 +6,41 @@ import { calibration, getData } from './package.ts';
 import { BASE, esc, fmt, METHODOLOGY_URL, pkgHref } from './util.ts';
 import { CHECKING_LABEL, NOISE_CAPTION, compareLinksHtml, noiseText, rangeText, roundCount } from '../core/seo.ts';
 import COMPARE_PAIRS from '../../data/compare.json';
+import { COMPARE_COLORS as COLORS } from '../core/layout.ts';
 
-// Ballpoint blue, berry, green ink: each checked for 3:1 against paper in both themes (see style.css).
-const COLORS = ['--marker', '--berry', '--green'];
-
-const title = (names: string[]) => names.map((n) => `<span class="pkg-name">${esc(n)}</span>`).join(' <span class="vs hand">vs</span> ');
+const title = (names: string[]) => names.map((n) => `<span class="pkg-name">${esc(n)}</span>`).join(' <span class="vs">vs</span> ');
 
 // Same caption in the skeleton, the live page and the prerendered page (scripts/data-lib.ts), so the
 // chart doesn't move when the data arrives (CLS).
 const caption = (names: string[]) => `<figcaption>
-            <h2 class="section-title">Real installs, week by week</h2>
+            <h2 class="panel-title">Real installs, week by week</h2>
             <ul class="legend">
               ${names.map((n, i) => `<li><span class="key key-line" style="--c:var(${COLORS[i]})" aria-hidden="true"></span>${esc(n)}</li>`).join('')}
               <li><span class="key key-npm" aria-hidden="true"></span>npm downloads (same color, dashed)</li>
             </ul>
           </figcaption>`;
 
-export function renderCompare(view: HTMLElement, names: string[]): void {
-  view.innerHTML = `
+// staticBody: the prerendered page body, shown instead of the skeleton and kept if the npm API fails.
+export function renderCompare(view: HTMLElement, names: string[], staticBody?: string): void {
+  view.innerHTML =
+    staticBody ??
+    `
     <article class="pkg compare" aria-busy="true">
       <header class="pkg-head"><h1 tabindex="-1">${title(names)}</h1></header>
-      <figure class="chart-fig">${caption(names)}<div class="sk sk-chart" role="status" aria-label="Loading the chart"></div></figure>
+      <figure class="chart-card">${caption(names)}<div class="sk sk-chart" role="status" aria-label="Loading the chart"></div></figure>
     </article>`;
-  void load(view, names);
+  void load(view, names, !!staticBody);
 }
 
-async function load(view: HTMLElement, names: string[]): Promise<void> {
+async function load(view: HTMLElement, names: string[], hasStatic: boolean): Promise<void> {
   const cal = await calibration();
   const results = await Promise.allSettled(names.map((n) => getData(n)));
   if (!view.isConnected) return;
   const hadFocus = view.contains(document.activeElement);
 
   const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [{ name: names[i], err: r.reason }] : []));
+  // A package npm doesn't know still gets the error; a failed API call keeps the prerendered snapshot.
+  if (failed.length && hasStatic && !failed.some((f) => f.err instanceof PackageNotFoundError)) return;
   if (failed.length) {
     view.innerHTML = `
       <section class="state state-error" role="alert">
@@ -57,7 +60,7 @@ async function load(view: HTMLElement, names: string[]): Promise<void> {
     view.innerHTML = `
       <article class="pkg compare">
         <header class="pkg-head"><h1 tabindex="-1">${title(names)}</h1></header>
-        <figure class="chart-fig">
+        <figure class="chart-card">
           ${caption(names)}
           <div class="chart"></div>
           <p class="fineprint">Square-root vertical scale. Weeks are aligned on the newest one.</p>
@@ -98,7 +101,7 @@ function unevenNote(names: string[], ests: Estimate[]): string {
 
 function table(names: string[], ests: Estimate[]): string {
   return `
-    <section class="versions compare-table">
+    <section class="panel compare-table">
       <h2 class="section-title">Last 7 days, side by side</h2>
       <div class="table-wrap">
         <table class="cmp-table">

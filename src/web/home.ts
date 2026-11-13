@@ -1,118 +1,72 @@
 import { isValidPackageName, searchPackages } from '../core/sources.ts';
-import type { FeaturedFile, FeaturedRow, SearchHit } from '../core/types.ts';
-import { HOME_COMPARE_SIZE, HOME_PITCH, NOISIEST_CAPTION, NOISIEST_NOTE, NOISIEST_TITLE, compareLinksHtml, homeFaqHtml, popularHtml, noiseBar, rangeText, roundCount } from '../core/seo.ts';
-import { listLinksHtml } from '../core/lists.ts';
-import COMPARE_PAIRS from '../../data/compare.json';
+import type { FeaturedFile, SearchHit } from '../core/types.ts';
+import { HOME_COMPARE_SIZE, homeFaqHtml } from '../core/seo.ts';
 import {
-  BASE, esc, fetchStatic, fmt, fmtCompact, fmtDate, navigate, pkgHref, METHODOLOGY_URL, headTools, timeAgo,
-} from './util.ts';
+  HOME_NOISY_SIZE, PINNED_SKELETON, categoriesHtml, compareSectionHtml, examplesHtml, heroHtml, howHtml, journalHtml, notebookHtml, pinnedCardHtml, pinnedRow, popularHtml,
+  searchFormInner, siteFooterHtml, siteHeaderHtml, type NavKey,
+} from '../core/layout.ts';
+import COMPARE_PAIRS from '../../data/compare.json';
+import { BASE, esc, fetchStatic, fmtCompact, fmtDate, navigate, pkgHref, headTools, timeAgo } from './util.ts';
 
-const FEATURED_SHOWN = 6;
-const EXAMPLES_SHOWN = 4;
+const EXAMPLES_SHOWN = 5;
 let searchId = 0;
 let searchAbort: AbortController | null = null;
 // ponytail: unbounded per-page-load cache keyed by the trimmed lowercase query; a session types few queries.
 const searchCache = new Map<string, SearchHit[]>();
 
+// Placeholders the size of the real links, so the hero doesn't move when they arrive (CLS).
+const EXAMPLES_SKELETON = '<span class="quiet-link sk-text" aria-hidden="true">&nbsp;</span>'.repeat(EXAMPLES_SHOWN);
+
 export function renderHome(view: HTMLElement): void {
   view.innerHTML = `
-    <div class="home-top"></div>
-    <section class="home">
-      <h1 class="home-title" tabindex="-1">human<span class="home-title-mark">loads</span></h1>
-      <p class="home-pitch">${HOME_PITCH}</p>
-      <div class="home-search"></div>
-      <p class="home-examples" aria-busy="true">
-        <span class="hand">try one</span>
-        ${'<span class="tag sk-tag" aria-hidden="true">&nbsp;</span>'.repeat(EXAMPLES_SHOWN)}
-      </p>
-    </section>
-    <div class="featured"></div>
-    ${compareLinksHtml(BASE, COMPARE_PAIRS.slice(0, HOME_COMPARE_SIZE), esc)}
-    ${listLinksHtml(BASE)}
-    <aside class="home-note">
-      <p class="hand">how it works</p>
-      <ol>
-        <li>Cut the spike every new version gets from mirrors in its first days.</li>
-        <li>Subtract the flat floor robots download from <em>every</em> version each week.</li>
-        <li>Show what is left as a range, with a confidence level. It still includes CI and dependency installs, so it is not a count of people.</li>
-      </ol>
-      <p><a href="${METHODOLOGY_URL}">Read the methodology</a></p>
-    </aside>
+    ${heroHtml(BASE, '<span data-slot="search"></span>', EXAMPLES_SKELETON, PINNED_SKELETON)}
+    ${howHtml(BASE)}
+    ${notebookHtml(BASE, null, '')}
+    ${compareSectionHtml(BASE, COMPARE_PAIRS.slice(0, HOME_COMPARE_SIZE))}
+    ${journalHtml(BASE)}
+    ${categoriesHtml(BASE, null)}
     ${homeFaqHtml(BASE)}`;
-  view.querySelector('.home-top')!.append(headTools());
-  view.querySelector('.home-search')!.append(searchBox('home'));
-  const data = fetchStatic<FeaturedFile>('data/featured.json');
-  void examples(view.querySelector<HTMLElement>('.home-examples')!, data);
-  void featured(view.querySelector<HTMLElement>('.featured')!, data);
+  view.querySelector('[data-slot="search"]')!.replaceWith(searchBox('home', { placeholder: 'Search npm packages' }));
+  void featured(view);
 }
 
-// "try one" links come from the live featured data, never a hand-picked list.
-async function examples(host: HTMLElement, data: Promise<FeaturedFile | null>): Promise<void> {
-  const f = await data;
-  if (!host.isConnected) return;
-  host.removeAttribute('aria-busy');
+// "try one" links, the pinned card, the "most noise" and "rising" lists and the compare chart all come from the
+// nightly featured data.
+async function featured(view: HTMLElement): Promise<void> {
+  const f = await fetchStatic<FeaturedFile>('data/featured.json');
+  if (!view.isConnected) return;
   const names = Array.isArray(f?.examples) ? f.examples.slice(0, EXAMPLES_SHOWN) : [];
-  if (!names.length) return void host.remove();
-  host.querySelectorAll('.sk-tag').forEach((t) => t.remove());
-  host.insertAdjacentHTML('beforeend', names.map((n) => `<a class="tag" href="${esc(pkgHref(n))}">${esc(n)}</a>`).join(''));
+  const rows = Array.isArray(f?.noisiest) ? f.noisiest.slice(0, HOME_NOISY_SIZE) : [];
+  const ex = view.querySelector<HTMLElement>('.home-examples')!;
+  if (names.length) {
+    ex.querySelectorAll('.sk-text').forEach((s) => s.remove());
+    ex.insertAdjacentHTML('beforeend', examplesHtml(BASE, names));
+  } else ex.remove();
+  const pin = view.querySelector<HTMLElement>('.hero-pin')!;
+  if (rows.length) pin.innerHTML = pinnedCardHtml(BASE, pinnedRow(rows));
+  else pin.remove();
+  const rising = Array.isArray(f?.rising) ? f.rising : [];
+  view.querySelector('#rankings')!.outerHTML = notebookHtml(BASE, rows, f ? fmtDate(f.generated) : '', rising, f?.noisyRecent);
+  if (f?.tops) view.querySelector('#categories')!.outerHTML = categoriesHtml(BASE, f.tops);
+  if (Array.isArray(f?.popular)) view.querySelector('#categories')!.insertAdjacentHTML('afterend', popularHtml(BASE, f.popular));
+  const cmp = view.querySelector('#compare');
+  if (cmp && f?.showcase) cmp.outerHTML = compareSectionHtml(BASE, COMPARE_PAIRS.slice(0, HOME_COMPARE_SIZE), f.showcase);
 }
 
-// Compact header shown on every page except home.
-export function masthead(): HTMLElement {
-  const header = document.createElement('header');
-  header.className = 'masthead';
-  header.innerHTML = `<a class="logo" href="${BASE}">human<span>loads</span></a>`;
-  header.append(searchBox('top'), headTools());
+// Every page's header: logo, search (except where the page has its own big one), nav, GitHub, theme.
+export function siteHeader(active: NavKey, withSearch: boolean): HTMLElement {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = siteHeaderHtml(BASE, active, withSearch ? '<span data-slot="search"></span>' : '', '<span data-slot="tools"></span>');
+  const header = tmp.firstElementChild as HTMLElement;
+  header.querySelector('[data-slot="search"]')?.replaceWith(searchBox('top', { placeholder: 'Search packages' }));
+  header.querySelector('[data-slot="tools"]')!.replaceWith(headTools());
   return header;
 }
 
-// ---------- featured index cards ----------
-
-// Placeholder cards built from the real card classes, so each line keeps the real line height
-// and swapping in the data does not push the rest of the page down (CLS).
-const SKELETON_CARD = `<li><div class="fcard sk-fcard">
-  <span class="fcard-name">&nbsp;</span>
-  <span class="fcard-desc">&nbsp;<br>&nbsp;</span>
-  <span class="fcard-nums">&nbsp;</span>
-  <span class="noise-bar noise-bar-mini"></span>
-  <span class="pill">&nbsp;</span>
-</div></li>`;
-
-async function featured(host: HTMLElement, data: Promise<FeaturedFile | null>): Promise<void> {
-  host.setAttribute('aria-busy', 'true');
-  host.innerHTML = `<section class="fcards-sec">
-      <h2 class="section-title">${NOISIEST_TITLE} <span class="fcards-note hand">${NOISIEST_NOTE}</span></h2>
-      <ul class="fcards" aria-hidden="true">${SKELETON_CARD.repeat(FEATURED_SHOWN)}</ul>
-      <p class="fineprint">${NOISIEST_CAPTION}</p>
-    </section>
-    <p class="fineprint">&nbsp;</p>`;
-  const f = await data;
-  if (!host.isConnected) return;
-  host.removeAttribute('aria-busy');
-  if (!f) return void host.replaceChildren();
-  const rows = Array.isArray(f.noisiest) ? f.noisiest.slice(0, FEATURED_SHOWN) : [];
-  const popular = popularHtml(BASE, Array.isArray(f.popular) ? f.popular : []);
-  if (!rows.length && !popular) return void host.replaceChildren();
-  const html = `${rows.length ? `<section class="fcards-sec">
-          <h2 class="section-title">${NOISIEST_TITLE} <span class="fcards-note hand">${NOISIEST_NOTE}</span></h2>
-          <ul class="fcards">${rows.map(card).join('')}</ul>
-          <p class="fineprint">${NOISIEST_CAPTION}</p>
-        </section>` : ''}${popular}`;
-  host.innerHTML = `${html}<p class="fineprint">Updated ${esc(fmtDate(f.generated))}. Weekly numbers, last 7 days.</p>`;
-}
-
-function card(r: FeaturedRow): string {
-  return `<li><a class="fcard" href="${esc(pkgHref(r.name))}">
-    <span class="fcard-name">${esc(r.name)}</span>
-    <span class="fcard-tag">${Math.round(r.inflation * 100)}% noise</span>
-    ${r.description ? `<span class="fcard-desc">${esc(r.description)}</span>` : ''}
-    <span class="fcard-nums">
-      <s class="struck num" title="npm: ${esc(fmt(r.npmWeekly))} / week"><span class="sr-only">npm says </span>${esc(roundCount(r.npmWeekly))}</s>
-      <span class="fcard-human">≈ <mark>${esc(rangeText(r.low, r.high))}</mark> real installs</span>
-    </span>
-    ${noiseBar(r.inflation, ' noise-bar-mini')}
-    <span class="pill pill-${esc(r.confidence)}">${esc(r.confidence)}</span>
-  </a></li>`;
+export function siteFooter(): HTMLElement {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = siteFooterHtml(BASE);
+  return tmp.firstElementChild as HTMLElement;
 }
 
 // ---------- prediction search (ARIA combobox) ----------
@@ -154,13 +108,11 @@ export function searchBox(id: string, opts: SearchOpts = {}): HTMLFormElement {
   form.setAttribute('role', 'search');
   form.noValidate = true;
   const listId = `q-${id}-list`;
+  const attrs = `id="q-${id}" name="q" autocomplete="off" autocapitalize="off" spellcheck="false"
+      role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${listId}" aria-describedby="q-${id}-hint"`;
   form.innerHTML = `
     <label class="sr-only" for="q-${id}">${esc(opts.label ?? 'npm package name')}</label>
-    <input id="q-${id}" name="q" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"
-      role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${listId}"
-      placeholder="${esc(opts.placeholder ?? (id === 'home' ? 'package name, e.g. zod' : 'search a package…'))}"
-      aria-describedby="q-${id}-hint" />
-    <button type="submit">${esc(opts.button ?? 'Look')}</button>
+    ${searchFormInner(id, opts.placeholder ?? 'Search packages', opts.button ?? 'Look', attrs)}
     <p class="search-hint" id="q-${id}-hint" aria-live="polite"></p>
     <p class="sr-only" aria-live="polite" data-status></p>
     <ul class="suggest" id="${listId}" role="listbox" aria-label="Matching packages" hidden></ul>`;
@@ -196,7 +148,7 @@ export function searchBox(id: string, opts: SearchOpts = {}): HTMLFormElement {
   };
   const choose = (name: string) => {
     if (!isValidPackageName(name)) {
-      hint.textContent = `"${name}" is not a valid npm package name.`;
+      hint.textContent = `"${name}" is not a valid npm package name. Enter the name as it appears on npmjs.com, or paste the package's npm link.`;
       return;
     }
     close();

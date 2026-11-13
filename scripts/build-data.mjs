@@ -288,9 +288,9 @@ if (failure) {
 const catalog = mergeCatalog(previous, fresh, { gone: notFound, blocked, keep, now: updated, max: CATALOG_MAX + badgeNames.length });
 
 // Featured cards.
-const { examples, popular, noisiest } = selectFeatured(Object.values(catalog));
+const { examples, popular, noisiest, noisyRecent, rising, showcase, tops } = selectFeatured(Object.values(catalog), comparePairs);
 const generated = updated;
-await write('data/featured.json', { generated, examples, popular, noisiest });
+await write('data/featured.json', { generated, examples, popular, noisiest, noisyRecent, rising, showcase, tops });
 const insights = buildInsights(Object.values(catalog), generated);
 await write('data/insights.json', insights);
 await write('data/lists.json', { generated, lists: buildLists(Object.values(catalog), comparePairs) });
